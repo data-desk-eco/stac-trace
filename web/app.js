@@ -1,4 +1,4 @@
-// ── Operator colours ──────────────────────────────────────────────
+// ── Colours ───────────────────────────────────────────────────────
 const OPERATOR_COLORS = {
   maxar: '#e05555', airbus: '#5588cc', planet: '#44aa77',
   iceye: '#cc9944', capella: '#cc9944', satellogic: '#9977bb',
@@ -10,12 +10,14 @@ const DATA_BASE = 'data';
 // ── Trail config ──────────────────────────────────────────────────
 const TRAIL_POINTS = 180;        // points per orbit
 const TRAIL_UPDATE_MS = 5000;
+const SELECTED_ORBITS = 3;       // show 3 full orbits when selected
 const TRAIL_BANDS = [
-  { from: 0,    to: 0.25, opacity: 0.35 },
-  { from: 0.25, to: 0.5,  opacity: 0.18 },
-  { from: 0.5,  to: 0.75, opacity: 0.09 },
-  { from: 0.75, to: 1.0,  opacity: 0.04 },
+  { from: 0,    to: 0.25, opacity: 0.5 },
+  { from: 0.25, to: 0.5,  opacity: 0.3 },
+  { from: 0.5,  to: 0.75, opacity: 0.15 },
+  { from: 0.75, to: 1.0,  opacity: 0.06 },
 ];
+const DIM_OPACITY = 0.08;        // opacity for non-selected satellites
 
 // ── State ─────────────────────────────────────────────────────────
 let satellites = [];
@@ -155,41 +157,71 @@ const map = new maplibregl.Map({
     version: 8,
     glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
     sources: {
-      'carto-dark': {
-        type: 'raster',
-        tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png'],
-        tileSize: 256,
-        attribution: '&copy; CARTO',
-        maxzoom: 18,
-      },
-      'ofm-labels': {
+      'ofm': {
         type: 'vector',
         url: 'https://tiles.openfreemap.org/planet',
       },
     },
     layers: [
       {
-        id: 'carto-tiles',
-        type: 'raster',
-        source: 'carto-dark',
+        id: 'background',
+        type: 'background',
+        paint: { 'background-color': '#2a2d2e' },
+      },
+      {
+        id: 'land',
+        type: 'fill',
+        source: 'ofm',
+        'source-layer': 'landcover',
+        paint: { 'fill-color': '#353a35' },
+      },
+      {
+        id: 'water',
+        type: 'fill',
+        source: 'ofm',
+        'source-layer': 'water',
+        paint: { 'fill-color': '#1e2830' },
+      },
+      {
+        id: 'land-boundary',
+        type: 'line',
+        source: 'ofm',
+        'source-layer': 'boundary',
+        filter: ['==', 'admin_level', 2],
+        paint: {
+          'line-color': 'rgba(255,255,255,0.12)',
+          'line-width': 0.5,
+        },
+      },
+      {
+        id: 'coastline',
+        type: 'line',
+        source: 'ofm',
+        'source-layer': 'water',
+        paint: {
+          'line-color': 'rgba(255,255,255,0.08)',
+          'line-width': 0.6,
+        },
       },
       {
         id: 'place-labels',
         type: 'symbol',
-        source: 'ofm-labels',
+        source: 'ofm',
         'source-layer': 'place',
-        filter: ['in', 'class', 'city', 'country', 'continent'],
+        filter: ['in', 'class', 'country', 'continent'],
         layout: {
           'text-field': '{name:latin}',
           'text-font': ['Noto Sans Regular'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 14],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 9, 6, 12],
           'text-anchor': 'center',
           'text-max-width': 8,
+          'text-transform': 'uppercase',
+          'text-letter-spacing': 0.15,
         },
         paint: {
-          'text-color': 'rgba(255, 255, 255, 0.45)',
-          'text-halo-color': 'rgba(0, 0, 0, 0.6)',
-          'text-halo-width': 1,
+          'text-color': 'rgba(255,255,255,0.3)',
+          'text-halo-color': 'rgba(0,0,0,0.4)',
+          'text-halo-width': 1.5,
         },
       },
     ],
@@ -217,24 +249,37 @@ map.on('load', async () => {
     data: { type: 'FeatureCollection', features: [] },
   });
 
-  map.addSource('ground-track', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-  });
-
   map.addSource('trails', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
   });
 
-  // Trail layer (below everything else)
+  map.addSource('selected-trail', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  // Default trails (dashed)
   map.addLayer({
     id: 'trails',
     type: 'line',
     source: 'trails',
     paint: {
       'line-color': ['get', 'color'],
-      'line-width': 1,
+      'line-width': ['get', 'width'],
+      'line-opacity': ['get', 'opacity'],
+      'line-dasharray': [1, 2],
+    },
+  });
+
+  // Selected satellite trail (solid)
+  map.addLayer({
+    id: 'selected-trail',
+    type: 'line',
+    source: 'selected-trail',
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': ['get', 'width'],
       'line-opacity': ['get', 'opacity'],
     },
   });
@@ -247,25 +292,12 @@ map.on('load', async () => {
     paint: {
       'fill-color': [
         'interpolate', ['linear'], ['get', 'count'],
-        1, 'rgba(255, 120, 50, 0.25)',
-        3, 'rgba(255, 80, 40, 0.4)',
-        10, 'rgba(255, 50, 30, 0.55)',
-        50, 'rgba(255, 20, 20, 0.7)'
+        1, 'rgba(0, 255, 80, 0.15)',
+        3, 'rgba(0, 255, 80, 0.3)',
+        10, 'rgba(0, 255, 80, 0.45)',
+        50, 'rgba(0, 255, 80, 0.65)'
       ],
-      'fill-outline-color': 'rgba(255, 150, 100, 0.15)',
-    },
-  });
-
-  // Ground track layer
-  map.addLayer({
-    id: 'ground-track',
-    type: 'line',
-    source: 'ground-track',
-    paint: {
-      'line-color': ['get', 'color'],
-      'line-width': 1.5,
-      'line-opacity': 0.6,
-      'line-dasharray': [2, 2],
+      'fill-outline-color': 'rgba(0, 255, 80, 0.1)',
     },
   });
 
@@ -275,9 +307,11 @@ map.on('load', async () => {
     type: 'circle',
     source: 'satellites',
     paint: {
-      'circle-radius': 4,
-      'circle-color': ['get', 'color'],
-      'circle-opacity': 0.9,
+      'circle-radius': ['get', 'radius'],
+      'circle-color': 'transparent',
+      'circle-stroke-color': ['get', 'color'],
+      'circle-stroke-width': 1.5,
+      'circle-stroke-opacity': ['get', 'dotOpacity'],
     },
   });
 
@@ -333,6 +367,9 @@ function tick() {
     const pos = propagate(sat.satrec, now);
     if (!pos) continue;
 
+    const isSelected = selectedSat && sat.noradId === selectedSat.noradId;
+    const isDimmed = selectedSat && !isSelected;
+
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [pos.lon, pos.lat] },
@@ -343,6 +380,8 @@ function tick() {
         alt_km: Math.round(pos.alt_km),
         color: sat.color,
         noradId: sat.noradId,
+        radius: isSelected ? 10 : 7,
+        dotOpacity: isDimmed ? DIM_OPACITY : 0.9,
       },
     });
   }
@@ -364,26 +403,33 @@ function getOrbitalPeriodMin(satrec) {
 }
 
 function updateTrails(now) {
-  const trailFeatures = [];
+  const defaultFeatures = [];
+  const selectedFeatures = [];
 
   for (const sat of satellites) {
     if (disabledOperators.has(sat.operator)) continue;
 
+    const isSelected = selectedSat && sat.noradId === selectedSat.noradId;
+    if (selectedSat && !isSelected) continue; // hide non-selected trails entirely
+    const orbits = isSelected ? SELECTED_ORBITS : 1;
+    const totalPoints = TRAIL_POINTS * orbits;
     const periodMin = getOrbitalPeriodMin(sat.satrec);
     const stepSec = (periodMin * 60) / TRAIL_POINTS;
+    const lineWidth = isSelected ? 4 : 2;
 
-    // Propagate backwards for one full orbit
+    // Propagate backwards
     const positions = [];
-    for (let i = 0; i <= TRAIL_POINTS; i++) {
+    for (let i = 0; i <= totalPoints; i++) {
       const secAgo = i * stepSec;
       const t = new Date(now.getTime() - secAgo * 1000);
       const pos = propagate(sat.satrec, t);
-      if (pos) positions.push([pos.lon, pos.lat, i / TRAIL_POINTS]); // fraction of orbit
+      if (pos) positions.push([pos.lon, pos.lat, i / totalPoints]);
     }
 
     if (positions.length < 2) continue;
 
-    // Split into opacity bands
+    const target = isSelected ? selectedFeatures : defaultFeatures;
+
     for (const band of TRAIL_BANDS) {
       const bandPts = positions.filter(p => p[2] >= band.from && p[2] <= band.to);
       if (bandPts.length < 2) continue;
@@ -392,16 +438,17 @@ function updateTrails(now) {
       const segments = splitAtAntimeridian(coords);
 
       for (const seg of segments) {
-        trailFeatures.push({
+        target.push({
           type: 'Feature',
           geometry: { type: 'LineString', coordinates: seg },
-          properties: { color: sat.color, opacity: band.opacity },
+          properties: { color: sat.color, opacity: band.opacity, width: lineWidth },
         });
       }
     }
   }
 
-  map.getSource('trails').setData({ type: 'FeatureCollection', features: trailFeatures });
+  map.getSource('trails').setData({ type: 'FeatureCollection', features: defaultFeatures });
+  map.getSource('selected-trail').setData({ type: 'FeatureCollection', features: selectedFeatures });
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
@@ -415,8 +462,9 @@ function buildLegend() {
   for (const [op, count] of Object.entries(operators).sort((a, b) => b[1] - a[1])) {
     const item = document.createElement('div');
     item.className = 'legend-item';
+    const color = OPERATOR_COLORS[op] || OPERATOR_COLORS.other;
     item.innerHTML = `
-      <span class="legend-dot" style="background:${OPERATOR_COLORS[op] || OPERATOR_COLORS.other}"></span>
+      <span class="legend-dot" style="background:${color}"></span>
       <span>${op}</span>
       <span class="legend-count">${count}</span>
     `;
@@ -471,45 +519,21 @@ map.on('mouseleave', 'collection-heat', () => {
   tooltip.classList.remove('visible');
 });
 
-// ── Satellite selection + ground track ────────────────────────────
-map.on('click', 'sat-dots', (e) => {
-  const f = e.features[0];
-  const noradId = f.properties.noradId;
-  const sat = satellites.find(s => s.noradId === noradId);
-  if (!sat) return;
-
+// ── Satellite selection ───────────────────────────────────────────
+function selectSatellite(sat) {
   selectedSat = sat;
 
   // Show satellite info
   const info = document.getElementById('sat-info');
+  const periodMin = getOrbitalPeriodMin(sat.satrec);
   info.innerHTML = `
-    <div class="sat-name" style="color:${sat.color}">${sat.name}</div>
+    <div class="sat-name">${sat.name}</div>
     <div class="sat-detail"><span class="sat-label">Operator</span><span>${sat.operator}</span></div>
     <div class="sat-detail"><span class="sat-label">Constellation</span><span>${sat.constellation}</span></div>
     ${sat.resolution_m ? `<div class="sat-detail"><span class="sat-label">Resolution</span><span>${sat.resolution_m}m</span></div>` : ''}
+    <div class="sat-detail"><span class="sat-label">Orbital period</span><span>${Math.round(periodMin)} min</span></div>
     <div class="sat-detail"><span class="sat-label">NORAD ID</span><span>${sat.noradId}</span></div>
   `;
-
-  // Draw ground track (next 90 minutes, 30-second steps)
-  const trackPoints = [];
-  const now = new Date();
-  for (let s = 0; s <= 90 * 60; s += 30) {
-    const t = new Date(now.getTime() + s * 1000);
-    const pos = propagate(sat.satrec, t);
-    if (pos) trackPoints.push([pos.lon, pos.lat]);
-  }
-
-  // Split track at antimeridian crossings
-  const segments = splitAtAntimeridian(trackPoints);
-
-  map.getSource('ground-track').setData({
-    type: 'FeatureCollection',
-    features: segments.map(seg => ({
-      type: 'Feature',
-      geometry: { type: 'LineString', coordinates: seg },
-      properties: { color: sat.color },
-    })),
-  });
 
   // Filter heatmap to this constellation
   if (stac1Data) {
@@ -519,24 +543,37 @@ map.on('click', 'sat-dots', (e) => {
     map.getSource('collection').setData(geojson);
   }
 
-  e.originalEvent.stopPropagation();
-});
+  // Force immediate trail update
+  lastTrailUpdate = 0;
+}
 
-// Click background to deselect
-map.on('click', (e) => {
-  if (selectedSat === null) return;
-  // Check if we clicked a satellite
-  const features = map.queryRenderedFeatures(e.point, { layers: ['sat-dots'] });
-  if (features.length > 0) return;
-
+function deselectSatellite() {
   selectedSat = null;
   document.getElementById('sat-info').innerHTML = '';
-  map.getSource('ground-track').setData({ type: 'FeatureCollection', features: [] });
 
   // Restore full heatmap
   if (stac1Data) {
     map.getSource('collection').setData(stac1ToGeoJSON(stac1Data));
   }
+
+  // Force immediate trail update
+  lastTrailUpdate = 0;
+}
+
+map.on('click', 'sat-dots', (e) => {
+  const f = e.features[0];
+  const noradId = f.properties.noradId;
+  const sat = satellites.find(s => s.noradId === noradId);
+  if (!sat) return;
+  selectSatellite(sat);
+  e.originalEvent.stopPropagation();
+});
+
+map.on('click', (e) => {
+  if (selectedSat === null) return;
+  const features = map.queryRenderedFeatures(e.point, { layers: ['sat-dots'] });
+  if (features.length > 0) return;
+  deselectSatellite();
 });
 
 // ── Helpers ───────────────────────────────────────────────────────

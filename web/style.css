@@ -1,14 +1,12 @@
 /* ── Custom properties ─────────────────────────────────────────── */
 :root {
-  --font: 'Inter', system-ui, -apple-system, sans-serif;
-  --bg-panel: rgba(15, 15, 20, 0.75);
-  --bg-panel-solid: rgb(15, 15, 20);
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --text-primary: rgba(255, 255, 255, 0.92);
-  --text-secondary: rgba(255, 255, 255, 0.55);
-  --text-muted: rgba(255, 255, 255, 0.35);
-  --accent: #e05555;
-  --radius: 12px;
+  --font: 'Space Mono', 'SF Mono', monospace;
+  --bg: #2a2d2e;
+  --ink: #e0e0e0;
+  --ink-light: #999;
+  --ink-faint: #666;
+  --border: rgba(255,255,255,0.1);
+  --radius: 0;
 }
 
 /* ── Reset ────────────────────────────────────────────────────── */
@@ -16,8 +14,8 @@
 
 body {
   font-family: var(--font);
-  background: #0a0a0e;
-  color: var(--text-primary);
+  background: var(--bg);
+  color: var(--ink);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
@@ -33,60 +31,64 @@ body {
   display: none !important;
 }
 
-/* ── Glass panels ─────────────────────────────────────────────── */
+/* ── Panels ───────────────────────────────────────────────────── */
 .glass {
-  background: var(--bg-panel);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
+  background: rgba(30, 33, 34, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
 }
 
 .panel {
   position: absolute;
   z-index: 10;
-  padding: 20px;
+  padding: 18px 20px;
 }
 
 /* ── Info panel ───────────────────────────────────────────────── */
 #panel {
   top: 20px;
   left: 20px;
-  width: 300px;
+  width: 280px;
 }
 
 #panel h1 {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  margin-bottom: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  color: var(--ink);
 }
 
 .title-trace {
-  color: var(--accent);
-  margin-left: 2px;
+  font-weight: 400;
 }
 
 .subtitle {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--ink-light);
   margin-bottom: 12px;
 }
 
 #sat-info {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--ink-light);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 2px;
 }
 
 #sat-info:empty { display: none; }
 
 #sat-info .sat-name {
   font-weight: 600;
-  color: var(--text-primary);
-  font-size: 14px;
+  color: var(--ink);
+  font-size: 12px;
   margin-bottom: 4px;
+  letter-spacing: 0.04em;
 }
 
 #sat-info .sat-detail {
@@ -95,23 +97,24 @@ body {
 }
 
 #sat-info .sat-label {
-  color: var(--text-muted);
+  color: var(--ink-faint);
+  text-transform: lowercase;
 }
 
 /* ── Legend ────────────────────────────────────────────────────── */
 #legend {
   bottom: 20px;
   left: 20px;
-  width: 180px;
+  width: 160px;
   padding: 14px 16px;
 }
 
 #legend h4 {
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 9px;
+  font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--text-muted);
+  color: var(--ink-faint);
   margin-bottom: 10px;
 }
 
@@ -119,33 +122,34 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 0;
+  padding: 2px 0;
   cursor: pointer;
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 11px;
+  color: var(--ink-light);
   transition: opacity 0.15s;
   user-select: none;
 }
 
 .legend-item:hover {
-  color: var(--text-primary);
+  color: var(--ink);
 }
 
 .legend-item.disabled {
-  opacity: 0.3;
+  opacity: 0.25;
 }
 
 .legend-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
+  background: currentColor;
 }
 
 .legend-count {
   margin-left: auto;
-  font-size: 10px;
-  color: var(--text-muted);
+  font-size: 9px;
+  color: var(--ink-faint);
   font-variant-numeric: tabular-nums;
 }
 
@@ -153,14 +157,16 @@ body {
 #tooltip {
   position: absolute;
   z-index: 20;
-  padding: 8px 12px;
-  font-size: 12px;
+  padding: 6px 10px;
+  font-size: 11px;
   line-height: 1.5;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.1s;
   white-space: nowrap;
-  max-width: 260px;
+  max-width: 240px;
+  background: rgba(30, 33, 34, 0.9);
+  border: 1px solid var(--border);
 }
 
 #tooltip.visible {
@@ -168,12 +174,14 @@ body {
 }
 
 #tooltip .tip-title {
-  font-weight: 600;
-  color: var(--text-primary);
+  font-weight: 500;
+  color: var(--ink);
+  letter-spacing: 0.02em;
 }
 
 #tooltip .tip-detail {
-  color: var(--text-secondary);
+  color: var(--ink-light);
+  font-size: 10px;
 }
 
 /* ── Mobile ───────────────────────────────────────────────────── */
@@ -187,13 +195,13 @@ body {
     padding: 14px;
   }
 
-  #panel h1 { font-size: 16px; }
-  .subtitle { font-size: 11px; }
+  #panel h1 { font-size: 12px; }
+  .subtitle { font-size: 10px; }
 
   #legend {
     bottom: 10px;
     left: 10px;
-    width: 160px;
+    width: 140px;
     padding: 10px 12px;
   }
 }
