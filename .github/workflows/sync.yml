@@ -1,0 +1,31 @@
+name: Sync data
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Fetch TLEs
+        run: uv run scripts/fetch_tles.py
+
+      - name: Sync STAC data
+        run: uv run scripts/sync_stac.py --days 7
+        env:
+          UP42_USERNAME: ${{ secrets.UP42_USERNAME }}
+          UP42_PASSWORD: ${{ secrets.UP42_PASSWORD }}
+
+      - name: Encode STAC1
+        run: uv run scripts/encode_stac1.py
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create data --title "Data" --notes "Auto-updated data files" 2>/dev/null || true
+          gh release upload data data/tles.txt data/satellites.json data/collection.stac1 --clobber
