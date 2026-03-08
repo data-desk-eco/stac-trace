@@ -1,0 +1,199 @@
+/* ── Custom properties ─────────────────────────────────────────── */
+:root {
+  --font: 'Inter', system-ui, -apple-system, sans-serif;
+  --bg-panel: rgba(15, 15, 20, 0.75);
+  --bg-panel-solid: rgb(15, 15, 20);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --text-primary: rgba(255, 255, 255, 0.92);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-muted: rgba(255, 255, 255, 0.35);
+  --accent: #e05555;
+  --radius: 12px;
+}
+
+/* ── Reset ────────────────────────────────────────────────────── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  background: #0a0a0e;
+  color: var(--text-primary);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Map ──────────────────────────────────────────────────────── */
+#map {
+  position: absolute;
+  inset: 0;
+}
+
+.maplibregl-ctrl-attrib,
+.maplibregl-ctrl-logo {
+  display: none !important;
+}
+
+/* ── Glass panels ─────────────────────────────────────────────── */
+.glass {
+  background: var(--bg-panel);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.panel {
+  position: absolute;
+  z-index: 10;
+  padding: 20px;
+}
+
+/* ── Info panel ───────────────────────────────────────────────── */
+#panel {
+  top: 20px;
+  left: 20px;
+  width: 300px;
+}
+
+#panel h1 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.title-trace {
+  color: var(--accent);
+  margin-left: 2px;
+}
+
+.subtitle {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+#sat-info {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+#sat-info:empty { display: none; }
+
+#sat-info .sat-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+#sat-info .sat-detail {
+  display: flex;
+  justify-content: space-between;
+}
+
+#sat-info .sat-label {
+  color: var(--text-muted);
+}
+
+/* ── Legend ────────────────────────────────────────────────────── */
+#legend {
+  bottom: 20px;
+  left: 20px;
+  width: 180px;
+  padding: 14px 16px;
+}
+
+#legend h4 {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: opacity 0.15s;
+  user-select: none;
+}
+
+.legend-item:hover {
+  color: var(--text-primary);
+}
+
+.legend-item.disabled {
+  opacity: 0.3;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Tooltip ──────────────────────────────────────────────────── */
+#tooltip {
+  position: absolute;
+  z-index: 20;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+#tooltip.visible {
+  opacity: 1;
+}
+
+#tooltip .tip-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+#tooltip .tip-detail {
+  color: var(--text-secondary);
+}
+
+/* ── Mobile ───────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  #panel {
+    top: auto;
+    bottom: 80px;
+    left: 10px;
+    right: 10px;
+    width: auto;
+    padding: 14px;
+  }
+
+  #panel h1 { font-size: 16px; }
+  .subtitle { font-size: 11px; }
+
+  #legend {
+    bottom: 10px;
+    left: 10px;
+    width: 160px;
+    padding: 10px 12px;
+  }
+}

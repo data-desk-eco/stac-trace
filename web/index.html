@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STAC TRACE / satellite imagery activity</title>
+  <meta name="description" content="Real-time EO satellite constellation visualizer with collection heatmap">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://unpkg.com/maplibre-gl@5.19.0/dist/maplibre-gl.css" rel="stylesheet">
+  <link href="style.css" rel="stylesheet">
+</head>
+<body>
+  <div id="map"></div>
+  <div id="panel" class="panel glass">
+    <h1>STAC<span class="title-trace">TRACE</span></h1>
+    <p class="subtitle">Real-time positions of Earth observation satellites, with a heatmap of recent high-resolution imagery collection.</p>
+    <div id="sat-info"></div>
+  </div>
+  <div id="legend" class="panel glass">
+    <h4>Operator</h4>
+    <div id="legend-items"></div>
+  </div>
+  <div id="tooltip" class="glass"></div>
+  <script src="https://unpkg.com/maplibre-gl@5.19.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/satellite.js@5.0.0/dist/satellite.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
