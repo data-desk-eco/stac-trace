@@ -37,6 +37,9 @@ dist/
 build/
 *.egg-info/
 
+# Worktrees
+.worktrees/
+
 # Generated data files
 data/
 *.geojson
