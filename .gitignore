@@ -45,3 +45,9 @@ data/
 *.geojson
 stac_data_*.json
 hotspots_*.geojson
+
+# Web data symlink and generated files
+web/data
+data/*.stac1
+data/tles.txt
+data/satellites.json
