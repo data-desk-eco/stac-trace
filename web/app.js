@@ -7,10 +7,21 @@ const OPERATOR_COLORS = {
 
 const DATA_BASE = 'data';
 
+// ── Trail config ──────────────────────────────────────────────────
+const TRAIL_POINTS = 180;        // points per orbit
+const TRAIL_UPDATE_MS = 5000;
+const TRAIL_BANDS = [
+  { from: 0,    to: 0.25, opacity: 0.35 },
+  { from: 0.25, to: 0.5,  opacity: 0.18 },
+  { from: 0.5,  to: 0.75, opacity: 0.09 },
+  { from: 0.75, to: 1.0,  opacity: 0.04 },
+];
+
 // ── State ─────────────────────────────────────────────────────────
 let satellites = [];
 let disabledOperators = new Set();
 let selectedSat = null;
+let lastTrailUpdate = 0;
 
 // ── TLE parsing ───────────────────────────────────────────────────
 function parseTLEs(text) {
@@ -185,7 +196,10 @@ const map = new maplibregl.Map({
   },
   center: [20, 30],
   zoom: 1.8,
-  projection: 'globe',
+});
+
+map.on('style.load', () => {
+  map.setProjection({ type: 'globe' });
 });
 
 // ── Data loading ──────────────────────────────────────────────────
@@ -208,6 +222,23 @@ map.on('load', async () => {
     data: { type: 'FeatureCollection', features: [] },
   });
 
+  map.addSource('trails', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  // Trail layer (below everything else)
+  map.addLayer({
+    id: 'trails',
+    type: 'line',
+    source: 'trails',
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': 1,
+      'line-opacity': ['get', 'opacity'],
+    },
+  });
+
   // Heatmap layer (below satellites)
   map.addLayer({
     id: 'collection-heat',
@@ -216,12 +247,12 @@ map.on('load', async () => {
     paint: {
       'fill-color': [
         'interpolate', ['linear'], ['get', 'count'],
-        1, 'rgba(255, 255, 255, 0.05)',
-        10, 'rgba(255, 100, 50, 0.2)',
-        50, 'rgba(255, 50, 50, 0.4)',
-        200, 'rgba(255, 0, 0, 0.6)'
+        1, 'rgba(255, 120, 50, 0.25)',
+        3, 'rgba(255, 80, 40, 0.4)',
+        10, 'rgba(255, 50, 30, 0.55)',
+        50, 'rgba(255, 20, 20, 0.7)'
       ],
-      'fill-outline-color': 'rgba(255, 255, 255, 0.05)',
+      'fill-outline-color': 'rgba(255, 150, 100, 0.15)',
     },
   });
 
@@ -294,6 +325,7 @@ map.on('load', async () => {
 // ── Animation loop ────────────────────────────────────────────────
 function tick() {
   const now = new Date();
+  const nowMs = now.getTime();
   const features = [];
 
   for (const sat of satellites) {
@@ -316,7 +348,60 @@ function tick() {
   }
 
   map.getSource('satellites').setData({ type: 'FeatureCollection', features });
+
+  // Update trails periodically (not every frame)
+  if (nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
+    lastTrailUpdate = nowMs;
+    updateTrails(now);
+  }
+
   requestAnimationFrame(tick);
+}
+
+function getOrbitalPeriodMin(satrec) {
+  // satrec.no is mean motion in rad/min → period = 2π / no
+  return (2 * Math.PI) / satrec.no;
+}
+
+function updateTrails(now) {
+  const trailFeatures = [];
+
+  for (const sat of satellites) {
+    if (disabledOperators.has(sat.operator)) continue;
+
+    const periodMin = getOrbitalPeriodMin(sat.satrec);
+    const stepSec = (periodMin * 60) / TRAIL_POINTS;
+
+    // Propagate backwards for one full orbit
+    const positions = [];
+    for (let i = 0; i <= TRAIL_POINTS; i++) {
+      const secAgo = i * stepSec;
+      const t = new Date(now.getTime() - secAgo * 1000);
+      const pos = propagate(sat.satrec, t);
+      if (pos) positions.push([pos.lon, pos.lat, i / TRAIL_POINTS]); // fraction of orbit
+    }
+
+    if (positions.length < 2) continue;
+
+    // Split into opacity bands
+    for (const band of TRAIL_BANDS) {
+      const bandPts = positions.filter(p => p[2] >= band.from && p[2] <= band.to);
+      if (bandPts.length < 2) continue;
+
+      const coords = bandPts.map(p => [p[0], p[1]]);
+      const segments = splitAtAntimeridian(coords);
+
+      for (const seg of segments) {
+        trailFeatures.push({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: seg },
+          properties: { color: sat.color, opacity: band.opacity },
+        });
+      }
+    }
+  }
+
+  map.getSource('trails').setData({ type: 'FeatureCollection', features: trailFeatures });
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
