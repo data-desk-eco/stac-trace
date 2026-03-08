@@ -1,40 +1,54 @@
 # stac-trace
 
-Minimal tool for exploring [STAC catalogues](https://stacspec.org/en). Ultimate purpose: surfacing interesting locations that other people have tasked high-resolution satellite imagery of in recent months. 'What's being watched?'
+Real-time Earth observation satellite constellation visualizer with a heatmap of recent high-resolution imagery collection activity. 'What's being watched?'
 
 ## System Architecture
 
-- **Shell scripts** (`scripts/`) for data fetching, analysis, and utilities
-- **DuckDB SQL** (`queries/analyze.sql`) for spatial processing and hotspot detection
-- **Makefile** for pipeline orchestration
-- **Persistent DuckDB database** at `data/stac.duckdb` for incremental data collection
+- **Python scripts** (`scripts/`) for data fetching and encoding (run with `uv run`)
+- **DuckDB** (`data/stac.duckdb`) for persistent STAC data storage
+- **Vanilla JS frontend** (`web/`) with MapLibre GL globe + satellite.js
+- **STAC1 binary format** for compact heatmap data delivery
+- **GitHub Actions** for daily automated data sync
 - Uses UP42 [API docs](https://developer.up42.com/reference/overview) for STAC queries
-- UP42 credentials in `.env` (OAuth authentication, not project API keys)
+- UP42 credentials in `.env` (OAuth authentication)
 
 ## Directory Structure
 
 ```
 scripts/
-  init.sh      # Database initialization
-  sync.sh      # Incremental data fetch from API
-  analyze.sh   # Run hotspot detection
-  geocode.sh   # Reverse geocode hotspot locations
-  status.sh    # Show database statistics
+  fetch_tles.py    # Fetch TLEs from CelesTrak for EO constellations
+  sync_stac.py     # Incremental STAC data sync from UP42
+  encode_stac1.py  # Encode DuckDB data to STAC1 binary format
 queries/
-  analyze.sql  # DuckDB SQL for hotspot detection
+  analyze.sql      # DuckDB SQL for hotspot detection (legacy)
+web/
+  index.html       # Frontend entry point
+  app.js           # MapLibre globe, satellite propagation, STAC1 decoder
+  style.css        # Glassmorphic UI styles
+  data -> ../data  # Symlink for local dev
 data/
-  stac.duckdb       # Persistent database
-  hotspots.geojson  # Analysis output
+  stac.duckdb      # Persistent database
+  tles.txt         # TLE data (generated)
+  satellites.json  # Satellite metadata (generated)
+  collection.stac1 # Binary heatmap data (generated)
+.github/
+  workflows/
+    sync.yml       # Daily data sync workflow
 ```
 
 ## Workflow
 
 ```bash
-make init              # One-time database setup
-make sync DAYS=30      # Fetch last 30 days of data
-make analyze           # Generate hotspots (instant, runs on DB)
-make status            # Show database statistics
-make GEOCODE=1         # Sync + analyze + geocode in one step
+# Data pipeline
+uv run scripts/fetch_tles.py           # Fetch satellite TLEs
+uv run scripts/sync_stac.py --days 30  # Sync STAC data from UP42
+uv run scripts/encode_stac1.py         # Encode heatmap binary
+
+# Local development
+python -m http.server -d web           # Serve frontend at localhost:8000
+
+# Verify STAC1 output
+uv run scripts/encode_stac1.py --verify
 ```
 
 ## Key Technical Details
@@ -45,44 +59,40 @@ make GEOCODE=1         # Sync + analyze + geocode in one step
 - Grant type: `password`
 - Credentials from environment variables: `UP42_USERNAME` and `UP42_PASSWORD`
 
-### API Limitations & Solutions
-- **500-item limit per request**: Pagination with `next` token
-- **Global coverage**: Splits world into 5 regions (Americas, Europe/Africa, Middle East/Asia, East Asia/Pacific, Antarctica) to ensure complete coverage
-- **Rate limiting**: 0.3s delay between paginated requests
+### TLE Fetching
+- Sources: CelesTrak active + resource groups
+- Matches satellites by name prefix to known EO constellations
+- Outputs TLE text file + JSON metadata with operator/color/resolution
+- Covers: Maxar, Airbus, Planet, ICEYE, Capella, Satellogic, government
 
-### Satellite Filtering
-- Filters to high-resolution (≤0.75m GSD) satellites
-- Excludes SPOT constellation (wide-area coverage)
-- Filtering applied both during fetch (jq) and in SQL queries
-- Focuses on actual tasking activity, not routine Earth observation
+### STAC Sync
+- 500-item limit per request with pagination
+- Splits world into 5 regions for complete coverage
+- Filters: resolution <= 0.75m, excludes SPOT
+- 0.3s delay between paginated requests
 
-### Hotspot Detection Algorithm
-1. **Grid-based clustering**: Uses 0.1 degree (~11km) grid cells
-2. **Adjacent cell merging**: Groups 2x2 grid cells to avoid boundary splitting
-3. **Minimum threshold**: 5 images per hotspot
-4. **Convex hull**: Creates polygon encompassing all images in cluster
-5. **Outputs**: GeoJSON FeatureCollection with centroid, image count, date range
+### STAC1 Binary Format
+- Compact binary encoding for frontend heatmap delivery
+- 0.1° grid cells with 7-day time buckets
+- Delta-encoded coordinates, varint-compressed
+- Constellation-indexed with nibble-packed counts
+- Typical output: ~2-5KB for hundreds of grid cells
+
+### Frontend
+- MapLibre GL JS with globe projection
+- CARTO Dark Matter basemap + OpenFreeMap labels
+- satellite.js (SGP4) for real-time orbital propagation
+- requestAnimationFrame animation loop
+- Click satellite → ground track + constellation-filtered heatmap
+- Glassmorphic UI panels
 
 ### Database Schema
 
 ```sql
--- Raw STAC items (append-only, deduplicated by id)
 items (id TEXT PRIMARY KEY, geometry JSON, properties JSON, bbox JSON, host TEXT, fetched_at TIMESTAMP)
-
--- Sync tracking for incremental fetches
 sync_log (id INTEGER, host TEXT, region TEXT, start_date TIMESTAMP, end_date TIMESTAMP, items_added INTEGER, synced_at TIMESTAMP)
 ```
 
-### Location Intelligence
-- Reverse geocoding via OpenStreetMap Nominatim (no API key needed)
-- Respects rate limits: 1 request per second
-- Simplifies names to first 2-3 address components
-- Falls back to coordinates if geocoding fails
-
-## Common Issues & Solutions
-
-1. **Authentication errors (404)**: Make sure to use OAuth, not project API keys
-2. **Database not found**: Run `make init` first
-3. **No items**: Check API credentials, run `make sync`
-4. **Boundary splitting**: Fixed by 2x2 grid cell merging in clustering algorithm
-5. **Rate limiting on geocoding**: 1.1s delay between requests per Nominatim policy
+### GitHub Actions
+- Daily sync at 06:00 UTC via `.github/workflows/sync.yml`
+- Uploads TLEs, satellite metadata, and STAC1 binary as GitHub release assets
