@@ -1,15 +1,36 @@
-name: Sync data
+name: Update data
+
 on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  sync:
+  update:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Download existing data
+        run: |
+          gh release download latest-data --pattern 'data.zip' --dir . 2>/dev/null || true
+          mkdir -p data
+          if [ -f data.zip ]; then unzip data.zip -d data && rm data.zip; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Fetch TLEs
         run: uv run scripts/fetch_tles.py
@@ -23,9 +44,25 @@ jobs:
       - name: Encode STAC1
         run: uv run scripts/encode_stac1.py
 
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Package and upload data
         run: |
-          gh release create data --title "Data" --notes "Auto-updated data files" 2>/dev/null || true
-          gh release upload data data/tles.txt data/satellites.json data/collection.stac1 --clobber
+          cd data
+          zip -r ../data.zip tles.txt satellites.json collection.stac1 stac.duckdb
+          cd ..
+          gh release create latest-data --title "Data" --notes "Auto-updated data files" 2>/dev/null || true
+          gh release upload latest-data data.zip --clobber
+          rm data.zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Copy data into web directory
+        run: |
+          mkdir -p web/data
+          cp data/tles.txt data/satellites.json data/collection.stac1 web/data/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4
