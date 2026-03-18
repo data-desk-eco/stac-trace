@@ -55,7 +55,8 @@ def authenticate(client: httpx.Client) -> str:
     username = os.environ.get("UP42_USERNAME", "")
     password = os.environ.get("UP42_PASSWORD", "")
     if not username or not password:
-        raise SystemExit("Error: UP42_USERNAME and UP42_PASSWORD must be set in .env")
+        log.warning("UP42_USERNAME and UP42_PASSWORD not set — skipping STAC sync")
+        raise SystemExit(0)
 
     resp = client.post(AUTH_URL, data={
         "username": username,
