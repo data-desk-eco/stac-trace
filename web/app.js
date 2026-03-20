@@ -5,25 +5,45 @@ const OPERATOR_COLORS = {
   government: '#cccc44', other: '#778899',
 };
 
+// Map STAC constellation → operator (for colouring footprints)
+const CONSTELLATION_OPERATORS = {
+  phr: 'airbus', pneo: 'airbus', 'pneo-hd15': 'airbus', spot: 'airbus',
+  skysat: 'planet',
+  'capella-geo': 'capella', 'capella-slc': 'capella', 'capella-sicd': 'capella', 'capella-gec': 'capella',
+  'beijing-3a': 'other', 'beijing-3n': 'other',
+  iceye: 'iceye',
+};
+
+// Map TLE constellation → STAC constellations (for satellite selection filtering)
+const CONSTELLATION_MAP = {
+  pleiades: ['phr', 'pneo', 'pneo-hd15'],
+  spot: ['spot'],
+  capella: ['capella-geo', 'capella-slc', 'capella-sicd', 'capella-gec'],
+  skysat: ['skysat'],
+};
+
 const DATA_BASE = 'data';
 
 // ── Trail config ──────────────────────────────────────────────────
-const TRAIL_POINTS = 180;        // points per orbit
+const TRAIL_POINTS = 180;
 const TRAIL_UPDATE_MS = 5000;
-const SELECTED_ORBITS = 3;       // show 3 full orbits when selected
+const SELECTED_ORBITS = 3;
 const TRAIL_BANDS = [
   { from: 0,    to: 0.25, opacity: 0.5 },
   { from: 0.25, to: 0.5,  opacity: 0.3 },
   { from: 0.5,  to: 0.75, opacity: 0.15 },
   { from: 0.75, to: 1.0,  opacity: 0.06 },
 ];
-const DIM_OPACITY = 0.08;        // opacity for non-selected satellites
+const DIM_OPACITY = 0.08;
 
 // ── State ─────────────────────────────────────────────────────────
 let satellites = [];
 let disabledOperators = new Set();
 let selectedSat = null;
 let lastTrailUpdate = 0;
+let duckdbConn = null;
+let dateCounts = [];     // [{date: 'YYYY-MM-DD', count: N}, ...]
+let currentDateIdx = -1;
 
 // ── TLE parsing ───────────────────────────────────────────────────
 function parseTLEs(text) {
@@ -48,10 +68,8 @@ function extractNoradId(line1) {
 function propagate(satrec, date) {
   const posVel = satellite.propagate(satrec, date);
   if (!posVel.position || typeof posVel.position === 'boolean') return null;
-
   const gmst = satellite.gstime(date);
   const geo = satellite.eciToGeodetic(posVel.position, gmst);
-
   return {
     lat: satellite.degreesLat(geo.latitude),
     lon: satellite.degreesLong(geo.longitude),
@@ -131,13 +149,15 @@ async function initDuckDB() {
   const logger = new duckdb.ConsoleLogger();
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule);
-  const conn = await db.connect();
-  return conn;
+  return await db.connect();
+}
+
+// ── Parquet URL ──────────────────────────────────────────────────
+function parquetUrl() {
+  return `${location.origin}${location.pathname}data/footprints.parquet`;
 }
 
 // ── Data loading ──────────────────────────────────────────────────
-let duckdbConn = null;
-
 map.on('load', async () => {
   // Add empty sources
   map.addSource('satellites', {
@@ -146,11 +166,6 @@ map.on('load', async () => {
   });
 
   map.addSource('collection', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-  });
-
-  map.addSource('clusters', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
   });
@@ -173,45 +188,7 @@ map.on('load', async () => {
     paint: {
       'fill-color': ['get', 'color'],
       'fill-opacity': 0.25,
-      'fill-outline-color': 'rgba(255, 255, 255, 0.15)',
-    },
-  });
-
-  // Cluster circles (sized by image count)
-  map.addLayer({
-    id: 'clusters',
-    type: 'circle',
-    source: 'clusters',
-    paint: {
-      'circle-radius': [
-        'interpolate', ['linear'], ['get', 'count'],
-        2, 6,
-        10, 12,
-        50, 22,
-        200, 36,
-      ],
-      'circle-color': ['get', 'color'],
-      'circle-opacity': 0.6,
-      'circle-stroke-color': 'rgba(255, 255, 255, 0.3)',
-      'circle-stroke-width': 1,
-    },
-  });
-
-  // Cluster count labels
-  map.addLayer({
-    id: 'cluster-labels',
-    type: 'symbol',
-    source: 'clusters',
-    layout: {
-      'text-field': ['get', 'count'],
-      'text-font': ['Noto Sans Regular'],
-      'text-size': 10,
-      'text-allow-overlap': true,
-    },
-    paint: {
-      'text-color': '#fff',
-      'text-halo-color': 'rgba(0, 0, 0, 0.6)',
-      'text-halo-width': 1,
+      'fill-outline-color': ['get', 'outlineColor'],
     },
   });
 
@@ -284,6 +261,9 @@ map.on('load', async () => {
   // Build legend
   buildLegend();
 
+  // Load date histogram and init slider
+  await initDateSlider();
+
   // Start animation
   tick();
 });
@@ -320,7 +300,6 @@ function tick() {
 
   map.getSource('satellites').setData({ type: 'FeatureCollection', features });
 
-  // Update trails periodically (not every frame)
   if (nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
     lastTrailUpdate = nowMs;
     updateTrails(now);
@@ -330,7 +309,6 @@ function tick() {
 }
 
 function getOrbitalPeriodMin(satrec) {
-  // satrec.no is mean motion in rad/min → period = 2π / no
   return (2 * Math.PI) / satrec.no;
 }
 
@@ -342,14 +320,13 @@ function updateTrails(now) {
     if (disabledOperators.has(sat.operator)) continue;
 
     const isSelected = selectedSat && sat.noradId === selectedSat.noradId;
-    if (selectedSat && !isSelected) continue; // hide non-selected trails entirely
+    if (selectedSat && !isSelected) continue;
     const orbits = isSelected ? SELECTED_ORBITS : 1;
     const totalPoints = TRAIL_POINTS * orbits;
     const periodMin = getOrbitalPeriodMin(sat.satrec);
     const stepSec = (periodMin * 60) / TRAIL_POINTS;
     const lineWidth = isSelected ? 4 : 2;
 
-    // Propagate backwards
     const positions = [];
     for (let i = 0; i <= totalPoints; i++) {
       const secAgo = i * stepSec;
@@ -383,73 +360,160 @@ function updateTrails(now) {
   map.getSource('selected-trail').setData({ type: 'FeatureCollection', features: selectedFeatures });
 }
 
-// ── Footprint query ──────────────────────────────────────────────
-// Map TLE constellation names → STAC constellation names
-const CONSTELLATION_MAP = {
-  pleiades: ['phr', 'pneo', 'pneo-hd15'],
-  spot: ['spot'],
-  capella: ['capella-geo', 'capella-slc', 'capella-sicd', 'capella-gec'],
-  // beijing-3 satellites are in STAC as 21AT but not in our TLE set
-};
-
-async function queryFootprints(constellation, color) {
+// ── Date slider ──────────────────────────────────────────────────
+async function initDateSlider() {
   if (!duckdbConn) return;
-  const parquetUrl = `${location.origin}${location.pathname}data/footprints.parquet`;
-  const stacNames = CONSTELLATION_MAP[constellation] || [constellation];
-  const inList = stacNames.map(n => `'${n}'`).join(', ');
 
-  // Query footprints and cluster counts in parallel
-  const [footprintResult, clusterResult] = await Promise.all([
-    duckdbConn.query(`
-      SELECT geojson FROM '${parquetUrl}'
-      WHERE constellation IN (${inList})
-    `),
-    // Grid-based clustering: round centroid to ~0.5° grid, count images per cell
-    duckdbConn.query(`
-      WITH centroids AS (
-        SELECT
-          geojson,
-          -- Extract centroid from first coordinate of the polygon
-          ROUND(CAST(json_extract(geojson, '$.coordinates[0][0][0]') AS DOUBLE) * 2) / 2 AS gx,
-          ROUND(CAST(json_extract(geojson, '$.coordinates[0][0][1]') AS DOUBLE) * 2) / 2 AS gy
-        FROM '${parquetUrl}'
-        WHERE constellation IN (${inList})
-      )
-      SELECT gx, gy, COUNT(*) AS count
-      FROM centroids
-      GROUP BY gx, gy
-      HAVING count >= 2
-      ORDER BY count DESC
-    `),
-  ]);
+  const result = await duckdbConn.query(`
+    SELECT CAST(datetime AS DATE) AS date, COUNT(*) AS n
+    FROM '${parquetUrl()}'
+    GROUP BY date ORDER BY date
+  `);
 
-  // Build footprint features
-  const features = [];
-  for (let i = 0; i < footprintResult.numRows; i++) {
-    const geojson = JSON.parse(footprintResult.getChildAt(0).get(i));
-    features.push({
-      type: 'Feature',
-      geometry: geojson,
-      properties: { color },
+  dateCounts = [];
+  for (let i = 0; i < result.numRows; i++) {
+    dateCounts.push({
+      date: String(result.getChildAt(0).get(i)),
+      count: Number(result.getChildAt(1).get(i)),
     });
   }
 
-  // Build cluster features
-  const clusters = [];
-  for (let i = 0; i < clusterResult.numRows; i++) {
-    const lon = clusterResult.getChildAt(0).get(i);
-    const lat = clusterResult.getChildAt(1).get(i);
-    const count = Number(clusterResult.getChildAt(2).get(i));
-    clusters.push({
+  if (dateCounts.length === 0) return;
+
+  const slider = document.getElementById('slider');
+  slider.min = 0;
+  slider.max = dateCounts.length - 1;
+  slider.value = dateCounts.length - 1;
+
+  buildHistogram();
+  buildSliderTicks();
+
+  slider.addEventListener('input', () => {
+    setDateIndex(Number(slider.value));
+  });
+
+  // Show slider and load latest date
+  document.getElementById('date-slider').classList.add('active');
+  setDateIndex(dateCounts.length - 1);
+}
+
+function buildHistogram() {
+  const container = document.getElementById('slider-histogram');
+  container.innerHTML = '';
+  const maxCount = Math.max(...dateCounts.map(d => d.count));
+
+  dateCounts.forEach((d, i) => {
+    const bar = document.createElement('div');
+    bar.className = 'histo-bar';
+    const pct = (i / (dateCounts.length - 1)) * 100;
+    bar.style.left = `${pct}%`;
+    bar.style.height = `${Math.max(1, (d.count / maxCount) * 24)}px`;
+    bar.addEventListener('click', () => {
+      document.getElementById('slider').value = i;
+      setDateIndex(i);
+    });
+    container.appendChild(bar);
+  });
+}
+
+function buildSliderTicks() {
+  const container = document.getElementById('slider-ticks');
+  container.innerHTML = '';
+  // Monthly ticks
+  let lastMonth = '';
+  dateCounts.forEach((d, i) => {
+    const month = d.date.slice(0, 7);
+    if (month !== lastMonth) {
+      lastMonth = month;
+      const tick = document.createElement('div');
+      tick.className = 'tick';
+      tick.style.left = `${(i / (dateCounts.length - 1)) * 100}%`;
+      container.appendChild(tick);
+    }
+  });
+}
+
+function updateSliderLabels(idx) {
+  const container = document.getElementById('slider-labels');
+  const d = dateCounts[idx];
+  container.innerHTML = `
+    <span>${dateCounts[0].date}</span>
+    <span class="current">${d.date} · ${d.count.toLocaleString()} images</span>
+    <span>${dateCounts[dateCounts.length - 1].date}</span>
+  `;
+
+  // Highlight active histogram bar
+  const bars = document.querySelectorAll('#slider-histogram .histo-bar');
+  bars.forEach((bar, i) => {
+    bar.classList.toggle('active', i === idx);
+  });
+}
+
+function setDateIndex(idx) {
+  if (idx === currentDateIdx) return;
+  currentDateIdx = idx;
+  updateSliderLabels(idx);
+  loadFootprintsForDate(dateCounts[idx].date);
+}
+
+// ── Footprint loading ────────────────────────────────────────────
+function getEnabledConstellations() {
+  // Get all STAC constellation names, filtered by legend-enabled operators
+  const enabled = [];
+  for (const [constellation, operator] of Object.entries(CONSTELLATION_OPERATORS)) {
+    if (!disabledOperators.has(operator)) {
+      enabled.push(constellation);
+    }
+  }
+  // If a satellite is selected, filter to just that satellite's constellations
+  if (selectedSat) {
+    const satConstellations = CONSTELLATION_MAP[selectedSat.constellation] || [selectedSat.constellation];
+    return enabled.filter(c => satConstellations.includes(c));
+  }
+  return enabled;
+}
+
+async function loadFootprintsForDate(date) {
+  if (!duckdbConn) return;
+
+  const constellations = getEnabledConstellations();
+  if (constellations.length === 0) {
+    map.getSource('collection').setData({ type: 'FeatureCollection', features: [] });
+    return;
+  }
+
+  const inList = constellations.map(c => `'${c}'`).join(', ');
+  const result = await duckdbConn.query(`
+    SELECT id, constellation, datetime, resolution, geojson
+    FROM '${parquetUrl()}'
+    WHERE CAST(datetime AS DATE) = '${date}'
+      AND constellation IN (${inList})
+  `);
+
+  const features = [];
+  for (let i = 0; i < result.numRows; i++) {
+    const constellation = result.getChildAt(1).get(i);
+    const operator = CONSTELLATION_OPERATORS[constellation] || 'other';
+    const color = OPERATOR_COLORS[operator] || OPERATOR_COLORS.other;
+    const geojson = JSON.parse(result.getChildAt(4).get(i));
+    const dt = String(result.getChildAt(2).get(i));
+
+    features.push({
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: [lon, lat] },
-      properties: { count, color },
+      geometry: geojson,
+      properties: {
+        id: result.getChildAt(0).get(i),
+        constellation,
+        datetime: dt,
+        resolution: result.getChildAt(3).get(i),
+        color,
+        outlineColor: color.replace(')', ', 0.15)').replace('rgb(', 'rgba('),
+      },
     });
   }
 
   map.getSource('collection').setData({ type: 'FeatureCollection', features });
-  map.getSource('clusters').setData({ type: 'FeatureCollection', features: clusters });
-  console.log(`Loaded ${features.length} footprints, ${clusters.length} clusters for ${constellation}`);
+  console.log(`Loaded ${features.length} footprints for ${date}`);
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
@@ -477,6 +541,10 @@ function buildLegend() {
         disabledOperators.add(op);
         item.classList.add('disabled');
       }
+      // Re-query footprints with updated filter
+      if (currentDateIdx >= 0) {
+        loadFootprintsForDate(dateCounts[currentDateIdx].date);
+      }
     });
     container.appendChild(item);
   }
@@ -485,46 +553,52 @@ function buildLegend() {
 // ── Tooltip ───────────────────────────────────────────────────────
 const tooltip = document.getElementById('tooltip');
 
-map.on('mousemove', 'sat-dots', (e) => {
-  map.getCanvas().style.cursor = 'pointer';
-  const f = e.features[0];
-  tooltip.innerHTML = `
-    <div class="tt-title">${f.properties.name}</div>
-    <div class="tt-detail">${f.properties.operator} &middot; ${f.properties.alt_km} km</div>
-  `;
+function showTooltip(html, e) {
+  tooltip.innerHTML = html;
   tooltip.style.left = (e.point.x + 14) + 'px';
   tooltip.style.top = (e.point.y - 14) + 'px';
   tooltip.style.display = 'block';
+}
+
+function hideTooltip() {
+  tooltip.style.display = 'none';
+}
+
+map.on('mousemove', 'sat-dots', (e) => {
+  map.getCanvas().style.cursor = 'pointer';
+  const f = e.features[0];
+  showTooltip(`
+    <div class="tt-title">${f.properties.name}</div>
+    <div class="tt-detail">${f.properties.operator} · ${f.properties.alt_km} km</div>
+  `, e);
 });
 
 map.on('mouseleave', 'sat-dots', () => {
   map.getCanvas().style.cursor = '';
-  tooltip.style.display = 'none';
+  hideTooltip();
 });
 
-map.on('mousemove', 'clusters', (e) => {
-  map.getCanvas().style.cursor = 'pointer';
+map.on('mousemove', 'footprints', (e) => {
+  if (e.features.length === 0) return;
   const f = e.features[0];
-  const count = f.properties.count;
-  tooltip.innerHTML = `
-    <div class="tt-title">${count} image${count !== 1 ? 's' : ''}</div>
-    <div class="tt-detail">collected in this area</div>
-  `;
-  tooltip.style.left = (e.point.x + 14) + 'px';
-  tooltip.style.top = (e.point.y - 14) + 'px';
-  tooltip.style.display = 'block';
+  const p = f.properties;
+  const dt = p.datetime ? p.datetime.replace('T', ' ').replace(/:\d\d\.\d+.*/, ' UTC') : '';
+  const res = p.resolution ? `${p.resolution}m resolution` : '';
+  showTooltip(`
+    <div class="tt-title">${p.constellation || 'Unknown'}</div>
+    ${dt ? `<div class="tt-detail">${dt}</div>` : ''}
+    ${res ? `<div class="tt-detail">${res}</div>` : ''}
+  `, e);
 });
 
-map.on('mouseleave', 'clusters', () => {
-  map.getCanvas().style.cursor = '';
-  tooltip.style.display = 'none';
+map.on('mouseleave', 'footprints', () => {
+  hideTooltip();
 });
 
 // ── Satellite selection ───────────────────────────────────────────
 function selectSatellite(sat) {
   selectedSat = sat;
 
-  // Show satellite info
   const info = document.getElementById('sat-info');
   const periodMin = getOrbitalPeriodMin(sat.satrec);
   info.innerHTML = `
@@ -536,10 +610,11 @@ function selectSatellite(sat) {
     <div class="sat-detail"><span class="sat-label">NORAD ID</span><span>${sat.noradId}</span></div>
   `;
 
-  // Query footprints for this constellation
-  queryFootprints(sat.constellation, sat.color);
+  // Re-query footprints filtered to this satellite's constellations
+  if (currentDateIdx >= 0) {
+    loadFootprintsForDate(dateCounts[currentDateIdx].date);
+  }
 
-  // Force immediate trail update
   lastTrailUpdate = 0;
 }
 
@@ -547,11 +622,11 @@ function deselectSatellite() {
   selectedSat = null;
   document.getElementById('sat-info').innerHTML = '';
 
-  // Clear footprints and clusters
-  map.getSource('collection').setData({ type: 'FeatureCollection', features: [] });
-  map.getSource('clusters').setData({ type: 'FeatureCollection', features: [] });
+  // Re-query footprints for all constellations
+  if (currentDateIdx >= 0) {
+    loadFootprintsForDate(dateCounts[currentDateIdx].date);
+  }
 
-  // Force immediate trail update
   lastTrailUpdate = 0;
 }
 
