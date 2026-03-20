@@ -41,13 +41,13 @@ jobs:
           UP42_USERNAME: ${{ secrets.UP42_USERNAME }}
           UP42_PASSWORD: ${{ secrets.UP42_PASSWORD }}
 
-      - name: Encode STAC1
-        run: uv run scripts/encode_stac1.py
+      - name: Export GeoParquet
+        run: uv run scripts/export_parquet.py
 
       - name: Package and upload data
         run: |
           cd data
-          zip -r ../data.zip tles.txt satellites.json collection.stac1 stac.duckdb
+          zip -r ../data.zip tles.txt satellites.json footprints.parquet stac.duckdb
           cd ..
           gh release create latest-data --title "Data" --notes "Auto-updated data files" 2>/dev/null || true
           gh release upload latest-data data.zip --clobber
@@ -58,7 +58,7 @@ jobs:
       - name: Copy data into web directory
         run: |
           mkdir -p web/data
-          cp data/tles.txt data/satellites.json data/collection.stac1 web/data/
+          cp data/tles.txt data/satellites.json data/footprints.parquet web/data/
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
