@@ -341,13 +341,23 @@ function updateTrails(now) {
 }
 
 // ── Footprint query ──────────────────────────────────────────────
+// Map TLE constellation names → STAC constellation names
+const CONSTELLATION_MAP = {
+  pleiades: ['phr', 'pneo', 'pneo-hd15'],
+  spot: ['spot'],
+  capella: ['capella-geo', 'capella-slc', 'capella-sicd', 'capella-gec'],
+  // beijing-3 satellites are in STAC as 21AT but not in our TLE set
+};
+
 async function queryFootprints(constellation, color) {
   if (!duckdbConn) return;
   const parquetUrl = `${location.origin}${location.pathname}data/footprints.parquet`;
+  const stacNames = CONSTELLATION_MAP[constellation] || [constellation];
+  const inList = stacNames.map(n => `'${n}'`).join(', ');
   const result = await duckdbConn.query(`
     SELECT geojson
     FROM '${parquetUrl}'
-    WHERE constellation = '${constellation}'
+    WHERE constellation IN (${inList})
   `);
 
   const features = [];
