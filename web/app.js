@@ -125,7 +125,9 @@ async function initDuckDB() {
     mvp: { mainModule: DUCKDB_CDN + 'duckdb-mvp.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-mvp.worker.js' },
     eh: { mainModule: DUCKDB_CDN + 'duckdb-eh.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-eh.worker.js' },
   });
-  const worker = new Worker(bundle.mainWorker);
+  const workerScript = await fetch(bundle.mainWorker).then(r => r.text());
+  const workerBlob = new Blob([workerScript], { type: 'text/javascript' });
+  const worker = new Worker(URL.createObjectURL(workerBlob));
   const logger = new duckdb.ConsoleLogger();
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule);
