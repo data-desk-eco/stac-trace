@@ -228,6 +228,50 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 
 #slider-track {
     position: relative;
+    height: 12px;
+    cursor: pointer;
+}
+
+#slider-track::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--border-light);
+}
+
+#slider-range {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.06);
+    border-left: 2px solid var(--text-muted);
+    border-right: 2px solid var(--text-muted);
+    cursor: grab;
+    min-width: 4px;
+}
+
+#slider-range:active { cursor: grabbing; }
+
+#slider-range::before,
+#slider-range::after {
+    content: '';
+    position: absolute;
+    top: 1px;
+    width: 8px;
+    height: 10px;
+    background: var(--text-muted);
+    transition: background 0.15s;
+}
+
+#slider-range::before { left: -5px; }
+#slider-range::after { right: -5px; }
+
+#slider-range::before:hover,
+#slider-range::after:hover {
+    background: var(--text-primary);
 }
 
 #slider-ticks {
@@ -245,47 +289,6 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
     height: 6px;
     background: rgba(255, 255, 255, 0.25);
     transform: translate(-50%, -50%);
-}
-
-#slider {
-    width: 100%;
-    -webkit-appearance: none;
-    appearance: none;
-    height: 1px;
-    background: var(--border-light);
-    outline: none;
-    cursor: pointer;
-}
-
-#slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 10px;
-    height: 10px;
-    background: var(--text-muted);
-    border: none;
-    border-radius: 0;
-    cursor: pointer;
-    transition: background 0.15s;
-}
-
-#slider::-webkit-slider-thumb:hover {
-    background: var(--text-primary);
-}
-
-#slider::-moz-range-thumb {
-    width: 10px;
-    height: 10px;
-    background: var(--text-muted);
-    border: none;
-    border-radius: 0;
-    cursor: pointer;
-}
-
-#slider::-moz-range-track {
-    height: 1px;
-    background: var(--border-light);
-    border: none;
 }
 
 #slider-labels {

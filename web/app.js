@@ -43,7 +43,8 @@ let selectedSat = null;
 let lastTrailUpdate = 0;
 let duckdbConn = null;
 let dateCounts = [];     // [{date: 'YYYY-MM-DD', count: N}, ...]
-let currentDateIdx = -1;
+let rangeStart = -1;     // index into dateCounts
+let rangeEnd = -1;
 
 // ── TLE parsing ───────────────────────────────────────────────────
 function parseTLEs(text) {
@@ -380,25 +381,22 @@ async function initDateSlider() {
 
   if (dateCounts.length === 0) return;
 
-  const slider = document.getElementById('slider');
-  slider.min = 0;
-  slider.max = dateCounts.length - 1;
-  slider.value = dateCounts.length - 1;
-
   buildHistogram();
   buildSliderTicks();
+  initRangeInteraction();
 
-  // Update labels live while dragging, but only query on release
-  slider.addEventListener('input', () => {
-    updateSliderLabels(Number(slider.value));
-  });
-  slider.addEventListener('change', () => {
-    setDateIndex(Number(slider.value));
-  });
-
-  // Show slider and load latest date
   document.getElementById('date-slider').classList.add('active');
-  setDateIndex(dateCounts.length - 1);
+
+  // Default: last 3 days
+  setRange(Math.max(0, dateCounts.length - 3), dateCounts.length - 1);
+}
+
+function idxToPercent(i) {
+  return dateCounts.length <= 1 ? 0 : (i / (dateCounts.length - 1)) * 100;
+}
+
+function percentToIdx(pct) {
+  return Math.round((pct / 100) * (dateCounts.length - 1));
 }
 
 function buildHistogram() {
@@ -409,13 +407,8 @@ function buildHistogram() {
   dateCounts.forEach((d, i) => {
     const bar = document.createElement('div');
     bar.className = 'histo-bar';
-    const pct = (i / (dateCounts.length - 1)) * 100;
-    bar.style.left = `${pct}%`;
+    bar.style.left = `${idxToPercent(i)}%`;
     bar.style.height = `${Math.max(1, (d.count / maxCount) * 24)}px`;
-    bar.addEventListener('click', () => {
-      document.getElementById('slider').value = i;
-      setDateIndex(i);
-    });
     container.appendChild(bar);
   });
 }
@@ -423,7 +416,6 @@ function buildHistogram() {
 function buildSliderTicks() {
   const container = document.getElementById('slider-ticks');
   container.innerHTML = '';
-  // Monthly ticks
   let lastMonth = '';
   dateCounts.forEach((d, i) => {
     const month = d.date.slice(0, 7);
@@ -431,33 +423,155 @@ function buildSliderTicks() {
       lastMonth = month;
       const tick = document.createElement('div');
       tick.className = 'tick';
-      tick.style.left = `${(i / (dateCounts.length - 1)) * 100}%`;
+      tick.style.left = `${idxToPercent(i)}%`;
       container.appendChild(tick);
     }
   });
 }
 
-function updateSliderLabels(idx) {
-  const container = document.getElementById('slider-labels');
-  const d = dateCounts[idx];
-  container.innerHTML = `
-    <span>${dateCounts[0].date}</span>
-    <span class="current">${d.date} · ${d.count.toLocaleString()} images</span>
-    <span>${dateCounts[dateCounts.length - 1].date}</span>
-  `;
+function updateRangeUI() {
+  const rangeEl = document.getElementById('slider-range');
+  rangeEl.style.left = `${idxToPercent(rangeStart)}%`;
+  rangeEl.style.right = `${100 - idxToPercent(rangeEnd)}%`;
 
-  // Highlight active histogram bar
+  // Highlight histogram bars in range
   const bars = document.querySelectorAll('#slider-histogram .histo-bar');
   bars.forEach((bar, i) => {
-    bar.classList.toggle('active', i === idx);
+    bar.classList.toggle('active', i >= rangeStart && i <= rangeEnd);
   });
+
+  // Labels
+  const totalImages = dateCounts.slice(rangeStart, rangeEnd + 1).reduce((s, d) => s + d.count, 0);
+  const container = document.getElementById('slider-labels');
+  if (rangeStart === rangeEnd) {
+    container.innerHTML = `
+      <span>${dateCounts[0].date}</span>
+      <span class="current">${dateCounts[rangeStart].date} · ${totalImages.toLocaleString()} images</span>
+      <span>${dateCounts[dateCounts.length - 1].date}</span>
+    `;
+  } else {
+    container.innerHTML = `
+      <span>${dateCounts[0].date}</span>
+      <span class="current">${dateCounts[rangeStart].date} to ${dateCounts[rangeEnd].date} · ${totalImages.toLocaleString()} images</span>
+      <span>${dateCounts[dateCounts.length - 1].date}</span>
+    `;
+  }
 }
 
-function setDateIndex(idx) {
-  if (idx === currentDateIdx) return;
-  currentDateIdx = idx;
-  updateSliderLabels(idx);
-  loadFootprintsForDate(dateCounts[idx].date);
+function setRange(start, end, skipLoad) {
+  start = Math.max(0, Math.min(start, dateCounts.length - 1));
+  end = Math.max(0, Math.min(end, dateCounts.length - 1));
+  if (start > end) [start, end] = [end, start];
+  if (start === rangeStart && end === rangeEnd) return;
+  rangeStart = start;
+  rangeEnd = end;
+  updateRangeUI();
+  if (!skipLoad) loadFootprintsForRange();
+}
+
+function initRangeInteraction() {
+  const track = document.getElementById('slider-track');
+  const rangeEl = document.getElementById('slider-range');
+  let dragMode = null; // 'start', 'end', 'slide', or null
+  let dragStartX = 0;
+  let dragStartIdxA = 0;
+  let dragStartIdxB = 0;
+
+  function xToIdx(clientX) {
+    const rect = track.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+    return percentToIdx(pct);
+  }
+
+  // Determine drag mode from click position relative to range handles
+  rangeEl.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const rect = rangeEl.getBoundingClientRect();
+    const edgeZone = 10; // px from edge to count as handle drag
+    if (e.clientX - rect.left < edgeZone) {
+      dragMode = 'start';
+    } else if (rect.right - e.clientX < edgeZone) {
+      dragMode = 'end';
+    } else {
+      dragMode = 'slide';
+    }
+    dragStartX = e.clientX;
+    dragStartIdxA = rangeStart;
+    dragStartIdxB = rangeEnd;
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', onDragEnd);
+  });
+
+  // Click on track outside range: move nearest handle
+  track.addEventListener('mousedown', (e) => {
+    if (e.target === rangeEl || rangeEl.contains(e.target)) return;
+    const idx = xToIdx(e.clientX);
+    // Move whichever handle is closer
+    const distToStart = Math.abs(idx - rangeStart);
+    const distToEnd = Math.abs(idx - rangeEnd);
+    if (distToStart <= distToEnd) {
+      setRange(idx, rangeEnd);
+    } else {
+      setRange(rangeStart, idx);
+    }
+  });
+
+  function onDrag(e) {
+    const idx = xToIdx(e.clientX);
+    if (dragMode === 'start') {
+      setRange(idx, rangeEnd, true);
+    } else if (dragMode === 'end') {
+      setRange(rangeStart, idx, true);
+    } else if (dragMode === 'slide') {
+      const trackRect = track.getBoundingClientRect();
+      const dxPct = ((e.clientX - dragStartX) / trackRect.width) * 100;
+      const dIdx = percentToIdx(dxPct + idxToPercent(dragStartIdxA)) - dragStartIdxA;
+      const span = dragStartIdxB - dragStartIdxA;
+      let newStart = dragStartIdxA + dIdx;
+      let newEnd = newStart + span;
+      if (newStart < 0) { newStart = 0; newEnd = span; }
+      if (newEnd >= dateCounts.length) { newEnd = dateCounts.length - 1; newStart = newEnd - span; }
+      setRange(newStart, newEnd, true);
+    }
+  }
+
+  function onDragEnd() {
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', onDragEnd);
+    dragMode = null;
+    loadFootprintsForRange();
+  }
+
+  // Touch support
+  rangeEl.addEventListener('touchstart', (e) => {
+    const touch = e.touches[0];
+    const rect = rangeEl.getBoundingClientRect();
+    const edgeZone = 20;
+    if (touch.clientX - rect.left < edgeZone) {
+      dragMode = 'start';
+    } else if (rect.right - touch.clientX < edgeZone) {
+      dragMode = 'end';
+    } else {
+      dragMode = 'slide';
+    }
+    dragStartX = touch.clientX;
+    dragStartIdxA = rangeStart;
+    dragStartIdxB = rangeEnd;
+    document.addEventListener('touchmove', onTouchDrag, { passive: false });
+    document.addEventListener('touchend', onTouchEnd);
+  });
+
+  function onTouchDrag(e) {
+    e.preventDefault();
+    onDrag({ clientX: e.touches[0].clientX });
+  }
+
+  function onTouchEnd() {
+    document.removeEventListener('touchmove', onTouchDrag);
+    document.removeEventListener('touchend', onTouchEnd);
+    dragMode = null;
+    loadFootprintsForRange();
+  }
 }
 
 // ── Footprint loading ────────────────────────────────────────────
@@ -477,8 +591,8 @@ function getEnabledConstellations() {
   return enabled;
 }
 
-async function loadFootprintsForDate(date) {
-  if (!duckdbConn) return;
+async function loadFootprintsForRange() {
+  if (!duckdbConn || rangeStart < 0) return;
 
   const constellations = getEnabledConstellations();
   if (constellations.length === 0) {
@@ -486,13 +600,15 @@ async function loadFootprintsForDate(date) {
     return;
   }
 
+  const startDate = dateCounts[rangeStart].date;
+  const endDate = dateCounts[rangeEnd].date;
   const inList = constellations.map(c => `'${c}'`).join(', ');
   const result = await duckdbConn.query(`
     SELECT id, constellation,
            STRFTIME(datetime, '%Y-%m-%d %H:%M') AS dt,
            resolution, geojson
     FROM '${parquetUrl()}'
-    WHERE STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') = '${date}'
+    WHERE STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') BETWEEN '${startDate}' AND '${endDate}'
       AND constellation IN (${inList})
   `);
 
@@ -519,7 +635,7 @@ async function loadFootprintsForDate(date) {
   }
 
   map.getSource('collection').setData({ type: 'FeatureCollection', features });
-  console.log(`Loaded ${features.length} footprints for ${date}`);
+  console.log(`Loaded ${features.length} footprints for ${startDate} to ${endDate}`);
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
@@ -548,8 +664,8 @@ function buildLegend() {
         item.classList.add('disabled');
       }
       // Re-query footprints with updated filter
-      if (currentDateIdx >= 0) {
-        loadFootprintsForDate(dateCounts[currentDateIdx].date);
+      if (rangeStart >= 0) {
+        loadFootprintsForRange();
       }
     });
     container.appendChild(item);
@@ -617,8 +733,8 @@ function selectSatellite(sat) {
   `;
 
   // Re-query footprints filtered to this satellite's constellations
-  if (currentDateIdx >= 0) {
-    loadFootprintsForDate(dateCounts[currentDateIdx].date);
+  if (rangeStart >= 0) {
+    loadFootprintsForRange();
   }
 
   lastTrailUpdate = 0;
@@ -629,8 +745,8 @@ function deselectSatellite() {
   document.getElementById('sat-info').innerHTML = '';
 
   // Re-query footprints for all constellations
-  if (currentDateIdx >= 0) {
-    loadFootprintsForDate(dateCounts[currentDateIdx].date);
+  if (rangeStart >= 0) {
+    loadFootprintsForRange();
   }
 
   lastTrailUpdate = 0;
