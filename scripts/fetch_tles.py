@@ -13,20 +13,20 @@ import httpx
 # "WORLDVIEW-3", "PLEIADES-NEO 4", "ICEYE-X1", etc.
 
 CATALOG = {
-    # Maxar
+    # Maxar (not on UP42 — no STAC data available)
     "WORLDVIEW": {"operator": "maxar", "constellation": "worldview", "resolution_m": 0.3},
     "LEGION": {"operator": "maxar", "constellation": "legion", "resolution_m": 0.3},
-    # Airbus
-    "PLEIADES-NEO": {"operator": "airbus", "constellation": "pleiades-neo", "resolution_m": 0.3},
+    # Airbus — TLE names map to STAC constellations: phr, pneo, pneo-hd15
+    "PLEIADES-NEO": {"operator": "airbus", "constellation": "pleiades", "resolution_m": 0.3},
     "PLEIADES": {"operator": "airbus", "constellation": "pleiades", "resolution_m": 0.5},
     "SPOT": {"operator": "airbus", "constellation": "spot", "resolution_m": 1.5},
-    # Planet
-    "SKYSAT": {"operator": "planet", "constellation": "skysat", "resolution_m": 0.5},
-    # ICEYE
+    # Planet — STAC constellation: skysat
+    "SKYSAT": {"operator": "planet", "constellation": "skysat", "resolution_m": 0.8},
+    # ICEYE (on UP42 but 404 — catalog disabled)
     "ICEYE": {"operator": "iceye", "constellation": "iceye", "resolution_m": 0.25},
-    # Capella
-    "CAPELLA": {"operator": "capella", "constellation": "capella", "resolution_m": 0.3},
-    # Satellogic
+    # Capella — STAC constellations: capella-geo, capella-slc, capella-sicd, capella-gec
+    "CAPELLA": {"operator": "capella", "constellation": "capella", "resolution_m": 0.5},
+    # Satellogic (on UP42 but 404 — catalog disabled)
     "NEWSAT": {"operator": "satellogic", "constellation": "newsat", "resolution_m": 0.7},
     "NUSAT": {"operator": "satellogic", "constellation": "newsat", "resolution_m": 0.7},
     # Government reference
