@@ -2,7 +2,7 @@
 const OPERATOR_COLORS = {
   maxar: '#e05555', airbus: '#5588cc', planet: '#44aa77',
   iceye: '#cc9944', capella: '#cc9944', satellogic: '#9977bb',
-  government: '#cccc44', other: '#778899',
+  '21at': '#55aabb', government: '#cccc44', other: '#778899',
 };
 
 // Map STAC constellation → operator (for colouring footprints)
@@ -10,7 +10,7 @@ const CONSTELLATION_OPERATORS = {
   phr: 'airbus', pneo: 'airbus', 'pneo-hd15': 'airbus', spot: 'airbus',
   skysat: 'planet',
   'capella-geo': 'capella', 'capella-slc': 'capella', 'capella-sicd': 'capella', 'capella-gec': 'capella',
-  'beijing-3a': 'other', 'beijing-3n': 'other',
+  'beijing-3a': '21at', 'beijing-3n': '21at',
   iceye: 'iceye',
 };
 
@@ -576,10 +576,11 @@ function initRangeInteraction() {
 
 // ── Footprint loading ────────────────────────────────────────────
 function getEnabledConstellations() {
-  // Get all STAC constellation names, filtered by legend-enabled operators
+  // Get STAC constellation names for operators that are in the legend and not disabled
+  const legendOperators = new Set(satellites.map(s => s.operator));
   const enabled = [];
   for (const [constellation, operator] of Object.entries(CONSTELLATION_OPERATORS)) {
-    if (!disabledOperators.has(operator)) {
+    if (legendOperators.has(operator) && !disabledOperators.has(operator)) {
       enabled.push(constellation);
     }
   }
