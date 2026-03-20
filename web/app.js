@@ -365,7 +365,7 @@ async function initDateSlider() {
   if (!duckdbConn) return;
 
   const result = await duckdbConn.query(`
-    SELECT CAST(datetime AS DATE) AS date, COUNT(*) AS n
+    SELECT STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') AS date, COUNT(*) AS n
     FROM '${parquetUrl()}'
     GROUP BY date ORDER BY date
   `);
@@ -373,7 +373,7 @@ async function initDateSlider() {
   dateCounts = [];
   for (let i = 0; i < result.numRows; i++) {
     dateCounts.push({
-      date: String(result.getChildAt(0).get(i)),
+      date: result.getChildAt(0).get(i),
       count: Number(result.getChildAt(1).get(i)),
     });
   }
@@ -388,7 +388,11 @@ async function initDateSlider() {
   buildHistogram();
   buildSliderTicks();
 
+  // Update labels live while dragging, but only query on release
   slider.addEventListener('input', () => {
+    updateSliderLabels(Number(slider.value));
+  });
+  slider.addEventListener('change', () => {
     setDateIndex(Number(slider.value));
   });
 
@@ -484,9 +488,11 @@ async function loadFootprintsForDate(date) {
 
   const inList = constellations.map(c => `'${c}'`).join(', ');
   const result = await duckdbConn.query(`
-    SELECT id, constellation, datetime, resolution, geojson
+    SELECT id, constellation,
+           STRFTIME(datetime, '%Y-%m-%d %H:%M') AS dt,
+           resolution, geojson
     FROM '${parquetUrl()}'
-    WHERE CAST(datetime AS DATE) = '${date}'
+    WHERE STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') = '${date}'
       AND constellation IN (${inList})
   `);
 
@@ -496,7 +502,7 @@ async function loadFootprintsForDate(date) {
     const operator = CONSTELLATION_OPERATORS[constellation] || 'other';
     const color = OPERATOR_COLORS[operator] || OPERATOR_COLORS.other;
     const geojson = JSON.parse(result.getChildAt(4).get(i));
-    const dt = String(result.getChildAt(2).get(i));
+    const dt = result.getChildAt(2).get(i);
 
     features.push({
       type: 'Feature',
@@ -507,7 +513,7 @@ async function loadFootprintsForDate(date) {
         datetime: dt,
         resolution: result.getChildAt(3).get(i),
         color,
-        outlineColor: color.replace(')', ', 0.15)').replace('rgb(', 'rgba('),
+        outlineColor: color + '26', // hex + 15% alpha
       },
     });
   }
