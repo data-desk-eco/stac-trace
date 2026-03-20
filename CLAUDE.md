@@ -26,7 +26,7 @@ queries/
 web/
   index.html       # Frontend entry point
   app.js           # MapLibre globe, satellite propagation, duckdb-wasm
-  style.css        # Dark minimal UI, Space Mono
+  style.css        # Dark minimal UI, Inter font
   data -> ../data  # Symlink for local dev
 data/
   stac.duckdb      # Persistent database (gitignored)
@@ -92,13 +92,12 @@ python -m http.server -d web
 - Queried client-side via duckdb-wasm with HTTP range requests
 
 ### Frontend (`web/app.js`)
-- MapLibre GL JS globe projection with OpenFreeMap vector tiles
-- Dark theme: muted green land, dark ocean, subtle borders
+- MapLibre GL JS globe projection with CARTO dark raster basemap + OFM vector labels
+- Inter variable font, dark glass panels (raf-watch style)
 - satellite.js SGP4 propagation in requestAnimationFrame loop
 - Per-satellite orbital period trails (dashed, operator-coloured)
-- Click satellite: 3-orbit solid trail, others hidden, constellation-filtered heatmap
+- Click satellite: 3-orbit solid trail, others hidden, footprint polygons shown
 - duckdb-wasm queries GeoParquet for actual footprint polygons on satellite selection
-- Space Mono monospace font
 
 ### Database Schema
 

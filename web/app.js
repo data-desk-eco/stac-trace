@@ -120,6 +120,7 @@ map.on('style.load', () => {
 // ── DuckDB-WASM setup ────────────────────────────────────────────
 async function initDuckDB() {
   const DUCKDB_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/';
+  const duckdb = await import(DUCKDB_CDN + 'duckdb-browser.mjs');
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: DUCKDB_CDN + 'duckdb-mvp.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-mvp.worker.js' },
     eh: { mainModule: DUCKDB_CDN + 'duckdb-eh.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-eh.worker.js' },
@@ -129,7 +130,6 @@ async function initDuckDB() {
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule);
   const conn = await db.connect();
-  await conn.query("INSTALL spatial; LOAD spatial");
   return conn;
 }
 
@@ -343,7 +343,7 @@ async function queryFootprints(constellation, color) {
   if (!duckdbConn) return;
   const parquetUrl = `${location.origin}${location.pathname}data/footprints.parquet`;
   const result = await duckdbConn.query(`
-    SELECT ST_AsGeoJSON(geometry) as geojson
+    SELECT geojson
     FROM '${parquetUrl}'
     WHERE constellation = '${constellation}'
   `);

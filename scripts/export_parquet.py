@@ -14,7 +14,6 @@ def main():
     args = parser.parse_args()
 
     db = duckdb.connect(args.db, read_only=True)
-    db.execute("INSTALL spatial; LOAD spatial")
 
     count = db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     print(f"Exporting {count:,} items to {args.output}...")
@@ -26,7 +25,7 @@ def main():
                 properties->>'constellation' AS constellation,
                 CAST(properties->>'datetime' AS TIMESTAMP) AS datetime,
                 CAST(properties->>'resolution' AS DOUBLE) AS resolution,
-                ST_GeomFromGeoJSON(geometry) AS geometry
+                geometry AS geojson
             FROM items
             ORDER BY constellation, datetime
         ) TO '{args.output}'
