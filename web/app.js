@@ -59,97 +59,6 @@ function propagate(satrec, date) {
   };
 }
 
-// ── STAC1 binary decoder ──────────────────────────────────────────
-function decodeSTAC1(buf) {
-  const bytes = new Uint8Array(buf);
-  const view = new DataView(buf);
-
-  const magic = String.fromCharCode(...bytes.slice(0, 5));
-  if (magic !== 'STAC1') throw new Error('Not a STAC1 file');
-
-  const gridRes = bytes[5] / 100;
-  const bucketDays = bytes[6];
-  const epochOffset = view.getUint16(7, true);
-  const numConstellations = bytes[9];
-
-  let pos = 10;
-
-  function readUvarint() {
-    let result = 0, shift = 0;
-    while (true) {
-      const b = bytes[pos++];
-      result |= (b & 0x7F) << shift;
-      if (!(b & 0x80)) break;
-      shift += 7;
-    }
-    return result;
-  }
-
-  function readSvarint() {
-    const u = readUvarint();
-    return (u >>> 1) ^ -(u & 1);
-  }
-
-  const numCells = readUvarint();
-
-  const constellations = [];
-  for (let i = 0; i < numConstellations; i++) {
-    let name = '';
-    while (bytes[pos] !== 0) name += String.fromCharCode(bytes[pos++]);
-    pos++;
-    constellations.push(name);
-  }
-
-  const cells = [];
-  let gx = 0, gy = 0;
-
-  for (let i = 0; i < numCells; i++) {
-    gx += readSvarint();
-    gy += readSvarint();
-    const nBuckets = readUvarint();
-    const buckets = [];
-    for (let j = 0; j < nBuckets; j++) {
-      const timeOffset = readUvarint();
-      const packed = bytes[pos++];
-      const constIdx = packed >> 4;
-      let count = packed & 0x0F;
-      if (count === 15) count = readUvarint();
-      buckets.push({ timeOffset, constellation: constellations[constIdx], count });
-    }
-    cells.push({ gx, gy, buckets });
-  }
-
-  return { gridRes, bucketDays, epochOffset, constellations, cells };
-}
-
-function stac1ToGeoJSON(decoded, filter) {
-  const { gridRes, cells } = decoded;
-  const features = [];
-  for (const cell of cells) {
-    let total = 0;
-    for (const b of cell.buckets) {
-      if (filter && !filter(b)) continue;
-      total += b.count;
-    }
-    if (total === 0) continue;
-    const lon = cell.gx * gridRes;
-    const lat = cell.gy * gridRes;
-    features.push({
-      type: 'Feature',
-      geometry: {
-        type: 'Polygon',
-        coordinates: [[
-          [lon, lat], [lon + gridRes, lat],
-          [lon + gridRes, lat + gridRes], [lon, lat + gridRes],
-          [lon, lat]
-        ]]
-      },
-      properties: { count: total }
-    });
-  }
-  return { type: 'FeatureCollection', features };
-}
-
 // ── Map setup ─────────────────────────────────────────────────────
 const map = new maplibregl.Map({
   container: 'map',
@@ -157,70 +66,44 @@ const map = new maplibregl.Map({
     version: 8,
     glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
     sources: {
-      'ofm': {
+      carto: {
+        type: 'raster',
+        tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png'],
+        tileSize: 256,
+      },
+      labels: {
         type: 'vector',
         url: 'https://tiles.openfreemap.org/planet',
       },
     },
     layers: [
+      { id: 'basemap', type: 'raster', source: 'carto' },
       {
-        id: 'background',
-        type: 'background',
-        paint: { 'background-color': '#2a2d2e' },
-      },
-      {
-        id: 'land',
-        type: 'fill',
-        source: 'ofm',
-        'source-layer': 'landcover',
-        paint: { 'fill-color': '#353a35' },
-      },
-      {
-        id: 'water',
-        type: 'fill',
-        source: 'ofm',
-        'source-layer': 'water',
-        paint: { 'fill-color': '#1e2830' },
-      },
-      {
-        id: 'land-boundary',
-        type: 'line',
-        source: 'ofm',
+        id: 'country-borders', type: 'line', source: 'labels',
         'source-layer': 'boundary',
-        filter: ['==', 'admin_level', 2],
+        filter: ['==', ['get', 'admin_level'], 2],
         paint: {
-          'line-color': 'rgba(255,255,255,0.12)',
-          'line-width': 0.5,
+          'line-color': 'rgba(255, 255, 255, 0.15)',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 6, 1.5],
         },
       },
       {
-        id: 'coastline',
-        type: 'line',
-        source: 'ofm',
-        'source-layer': 'water',
-        paint: {
-          'line-color': 'rgba(255,255,255,0.08)',
-          'line-width': 0.6,
-        },
-      },
-      {
-        id: 'place-labels',
-        type: 'symbol',
-        source: 'ofm',
+        id: 'country-labels', type: 'symbol', source: 'labels',
         'source-layer': 'place',
-        filter: ['in', 'class', 'country', 'continent'],
+        filter: ['==', ['get', 'class'], 'country'],
+        minzoom: 2,
         layout: {
-          'text-field': '{name:latin}',
+          'symbol-sort-key': ['get', 'rank'],
+          'text-field': ['coalesce', ['get', 'name:en'], ['get', 'name']],
           'text-font': ['Noto Sans Regular'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 9, 6, 12],
-          'text-anchor': 'center',
-          'text-max-width': 8,
+          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 14],
           'text-transform': 'uppercase',
           'text-letter-spacing': 0.15,
+          'text-max-width': 8,
         },
         paint: {
-          'text-color': 'rgba(255,255,255,0.3)',
-          'text-halo-color': 'rgba(0,0,0,0.4)',
+          'text-color': 'rgba(255, 255, 255, 0.85)',
+          'text-halo-color': 'rgba(0, 0, 0, 0.6)',
           'text-halo-width': 1.5,
         },
       },
@@ -234,8 +117,24 @@ map.on('style.load', () => {
   map.setProjection({ type: 'globe' });
 });
 
+// ── DuckDB-WASM setup ────────────────────────────────────────────
+async function initDuckDB() {
+  const DUCKDB_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/';
+  const bundle = await duckdb.selectBundle({
+    mvp: { mainModule: DUCKDB_CDN + 'duckdb-mvp.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-mvp.worker.js' },
+    eh: { mainModule: DUCKDB_CDN + 'duckdb-eh.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-eh.worker.js' },
+  });
+  const worker = new Worker(bundle.mainWorker);
+  const logger = new duckdb.ConsoleLogger();
+  const db = new duckdb.AsyncDuckDB(logger, worker);
+  await db.instantiate(bundle.mainModule);
+  const conn = await db.connect();
+  await conn.query("INSTALL spatial; LOAD spatial");
+  return conn;
+}
+
 // ── Data loading ──────────────────────────────────────────────────
-let stac1Data = null;
+let duckdbConn = null;
 
 map.on('load', async () => {
   // Add empty sources
@@ -257,6 +156,18 @@ map.on('load', async () => {
   map.addSource('selected-trail', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
+  });
+
+  // Footprint polygons (below trails and satellites)
+  map.addLayer({
+    id: 'footprints',
+    type: 'fill',
+    source: 'collection',
+    paint: {
+      'fill-color': ['get', 'color'],
+      'fill-opacity': 0.25,
+      'fill-outline-color': 'rgba(255, 255, 255, 0.15)',
+    },
   });
 
   // Default trails (dashed)
@@ -284,23 +195,6 @@ map.on('load', async () => {
     },
   });
 
-  // Heatmap layer (below satellites)
-  map.addLayer({
-    id: 'collection-heat',
-    type: 'fill',
-    source: 'collection',
-    paint: {
-      'fill-color': [
-        'interpolate', ['linear'], ['get', 'count'],
-        1, 'rgba(0, 255, 80, 0.15)',
-        3, 'rgba(0, 255, 80, 0.3)',
-        10, 'rgba(0, 255, 80, 0.45)',
-        50, 'rgba(0, 255, 80, 0.65)'
-      ],
-      'fill-outline-color': 'rgba(0, 255, 80, 0.1)',
-    },
-  });
-
   // Satellite dots
   map.addLayer({
     id: 'sat-dots',
@@ -316,11 +210,12 @@ map.on('load', async () => {
   });
 
   // Load data in parallel
-  const [tleText, metaJson, stac1Buf] = await Promise.all([
+  const [tleText, metaJson, conn] = await Promise.all([
     fetch(`${DATA_BASE}/tles.txt`).then(r => r.ok ? r.text() : ''),
     fetch(`${DATA_BASE}/satellites.json`).then(r => r.ok ? r.json() : {}),
-    fetch(`${DATA_BASE}/collection.stac1`).then(r => r.ok ? r.arrayBuffer() : null),
+    initDuckDB(),
   ]);
+  duckdbConn = conn;
 
   // Parse TLEs and merge metadata
   const tles = parseTLEs(tleText);
@@ -340,14 +235,6 @@ map.on('load', async () => {
   });
 
   console.log(`Loaded ${satellites.length} satellites`);
-
-  // Decode STAC1 heatmap
-  if (stac1Buf) {
-    stac1Data = decodeSTAC1(stac1Buf);
-    const geojson = stac1ToGeoJSON(stac1Data);
-    map.getSource('collection').setData(geojson);
-    console.log(`Loaded ${stac1Data.cells.length} heatmap cells`);
-  }
 
   // Build legend
   buildLegend();
@@ -451,6 +338,30 @@ function updateTrails(now) {
   map.getSource('selected-trail').setData({ type: 'FeatureCollection', features: selectedFeatures });
 }
 
+// ── Footprint query ──────────────────────────────────────────────
+async function queryFootprints(constellation, color) {
+  if (!duckdbConn) return;
+  const parquetUrl = `${location.origin}${location.pathname}data/footprints.parquet`;
+  const result = await duckdbConn.query(`
+    SELECT ST_AsGeoJSON(geometry) as geojson
+    FROM '${parquetUrl}'
+    WHERE constellation = '${constellation}'
+  `);
+
+  const features = [];
+  for (let i = 0; i < result.numRows; i++) {
+    const geojson = JSON.parse(result.getChildAt(0).get(i));
+    features.push({
+      type: 'Feature',
+      geometry: geojson,
+      properties: { color },
+    });
+  }
+
+  map.getSource('collection').setData({ type: 'FeatureCollection', features });
+  console.log(`Loaded ${features.length} footprints for ${constellation}`);
+}
+
 // ── Legend ─────────────────────────────────────────────────────────
 function buildLegend() {
   const container = document.getElementById('legend-items');
@@ -464,9 +375,9 @@ function buildLegend() {
     item.className = 'legend-item';
     const color = OPERATOR_COLORS[op] || OPERATOR_COLORS.other;
     item.innerHTML = `
-      <span class="legend-dot" style="background:${color}"></span>
-      <span>${op}</span>
-      <span class="legend-count">${count}</span>
+      <span class="legend-circle" style="background:${color}"></span>
+      <span class="legend-name">${op}</span>
+      <span class="legend-cnt">${count}</span>
     `;
     item.addEventListener('click', () => {
       if (disabledOperators.has(op)) {
@@ -488,35 +399,17 @@ map.on('mousemove', 'sat-dots', (e) => {
   map.getCanvas().style.cursor = 'pointer';
   const f = e.features[0];
   tooltip.innerHTML = `
-    <div class="tip-title">${f.properties.name}</div>
-    <div class="tip-detail">${f.properties.operator} &middot; ${f.properties.alt_km} km</div>
+    <div class="tt-title">${f.properties.name}</div>
+    <div class="tt-detail">${f.properties.operator} &middot; ${f.properties.alt_km} km</div>
   `;
   tooltip.style.left = (e.point.x + 14) + 'px';
   tooltip.style.top = (e.point.y - 14) + 'px';
-  tooltip.classList.add('visible');
+  tooltip.style.display = 'block';
 });
 
 map.on('mouseleave', 'sat-dots', () => {
   map.getCanvas().style.cursor = '';
-  tooltip.classList.remove('visible');
-});
-
-// Heatmap tooltip
-map.on('mousemove', 'collection-heat', (e) => {
-  if (e.features.length === 0) return;
-  const f = e.features[0];
-  const count = f.properties.count;
-  tooltip.innerHTML = `
-    <div class="tip-title">${count} image${count !== 1 ? 's' : ''}</div>
-    <div class="tip-detail">collection activity</div>
-  `;
-  tooltip.style.left = (e.point.x + 14) + 'px';
-  tooltip.style.top = (e.point.y - 14) + 'px';
-  tooltip.classList.add('visible');
-});
-
-map.on('mouseleave', 'collection-heat', () => {
-  tooltip.classList.remove('visible');
+  tooltip.style.display = 'none';
 });
 
 // ── Satellite selection ───────────────────────────────────────────
@@ -535,13 +428,8 @@ function selectSatellite(sat) {
     <div class="sat-detail"><span class="sat-label">NORAD ID</span><span>${sat.noradId}</span></div>
   `;
 
-  // Filter heatmap to this constellation
-  if (stac1Data) {
-    const geojson = stac1ToGeoJSON(stac1Data, b =>
-      b.constellation.toLowerCase() === sat.constellation.toLowerCase()
-    );
-    map.getSource('collection').setData(geojson);
-  }
+  // Query footprints for this constellation
+  queryFootprints(sat.constellation, sat.color);
 
   // Force immediate trail update
   lastTrailUpdate = 0;
@@ -551,10 +439,8 @@ function deselectSatellite() {
   selectedSat = null;
   document.getElementById('sat-info').innerHTML = '';
 
-  // Restore full heatmap
-  if (stac1Data) {
-    map.getSource('collection').setData(stac1ToGeoJSON(stac1Data));
-  }
+  // Clear footprints
+  map.getSource('collection').setData({ type: 'FeatureCollection', features: [] });
 
   // Force immediate trail update
   lastTrailUpdate = 0;
