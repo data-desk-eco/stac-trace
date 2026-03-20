@@ -150,6 +150,11 @@ map.on('load', async () => {
     data: { type: 'FeatureCollection', features: [] },
   });
 
+  map.addSource('clusters', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
   map.addSource('trails', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -169,6 +174,44 @@ map.on('load', async () => {
       'fill-color': ['get', 'color'],
       'fill-opacity': 0.25,
       'fill-outline-color': 'rgba(255, 255, 255, 0.15)',
+    },
+  });
+
+  // Cluster circles (sized by image count)
+  map.addLayer({
+    id: 'clusters',
+    type: 'circle',
+    source: 'clusters',
+    paint: {
+      'circle-radius': [
+        'interpolate', ['linear'], ['get', 'count'],
+        2, 6,
+        10, 12,
+        50, 22,
+        200, 36,
+      ],
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.6,
+      'circle-stroke-color': 'rgba(255, 255, 255, 0.3)',
+      'circle-stroke-width': 1,
+    },
+  });
+
+  // Cluster count labels
+  map.addLayer({
+    id: 'cluster-labels',
+    type: 'symbol',
+    source: 'clusters',
+    layout: {
+      'text-field': ['get', 'count'],
+      'text-font': ['Noto Sans Regular'],
+      'text-size': 10,
+      'text-allow-overlap': true,
+    },
+    paint: {
+      'text-color': '#fff',
+      'text-halo-color': 'rgba(0, 0, 0, 0.6)',
+      'text-halo-width': 1,
     },
   });
 
@@ -354,15 +397,36 @@ async function queryFootprints(constellation, color) {
   const parquetUrl = `${location.origin}${location.pathname}data/footprints.parquet`;
   const stacNames = CONSTELLATION_MAP[constellation] || [constellation];
   const inList = stacNames.map(n => `'${n}'`).join(', ');
-  const result = await duckdbConn.query(`
-    SELECT geojson
-    FROM '${parquetUrl}'
-    WHERE constellation IN (${inList})
-  `);
 
+  // Query footprints and cluster counts in parallel
+  const [footprintResult, clusterResult] = await Promise.all([
+    duckdbConn.query(`
+      SELECT geojson FROM '${parquetUrl}'
+      WHERE constellation IN (${inList})
+    `),
+    // Grid-based clustering: round centroid to ~0.5° grid, count images per cell
+    duckdbConn.query(`
+      WITH centroids AS (
+        SELECT
+          geojson,
+          -- Extract centroid from first coordinate of the polygon
+          ROUND(CAST(json_extract(geojson, '$.coordinates[0][0][0]') AS DOUBLE) * 2) / 2 AS gx,
+          ROUND(CAST(json_extract(geojson, '$.coordinates[0][0][1]') AS DOUBLE) * 2) / 2 AS gy
+        FROM '${parquetUrl}'
+        WHERE constellation IN (${inList})
+      )
+      SELECT gx, gy, COUNT(*) AS count
+      FROM centroids
+      GROUP BY gx, gy
+      HAVING count >= 2
+      ORDER BY count DESC
+    `),
+  ]);
+
+  // Build footprint features
   const features = [];
-  for (let i = 0; i < result.numRows; i++) {
-    const geojson = JSON.parse(result.getChildAt(0).get(i));
+  for (let i = 0; i < footprintResult.numRows; i++) {
+    const geojson = JSON.parse(footprintResult.getChildAt(0).get(i));
     features.push({
       type: 'Feature',
       geometry: geojson,
@@ -370,8 +434,22 @@ async function queryFootprints(constellation, color) {
     });
   }
 
+  // Build cluster features
+  const clusters = [];
+  for (let i = 0; i < clusterResult.numRows; i++) {
+    const lon = clusterResult.getChildAt(0).get(i);
+    const lat = clusterResult.getChildAt(1).get(i);
+    const count = Number(clusterResult.getChildAt(2).get(i));
+    clusters.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [lon, lat] },
+      properties: { count, color },
+    });
+  }
+
   map.getSource('collection').setData({ type: 'FeatureCollection', features });
-  console.log(`Loaded ${features.length} footprints for ${constellation}`);
+  map.getSource('clusters').setData({ type: 'FeatureCollection', features: clusters });
+  console.log(`Loaded ${features.length} footprints, ${clusters.length} clusters for ${constellation}`);
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
@@ -424,6 +502,24 @@ map.on('mouseleave', 'sat-dots', () => {
   tooltip.style.display = 'none';
 });
 
+map.on('mousemove', 'clusters', (e) => {
+  map.getCanvas().style.cursor = 'pointer';
+  const f = e.features[0];
+  const count = f.properties.count;
+  tooltip.innerHTML = `
+    <div class="tt-title">${count} image${count !== 1 ? 's' : ''}</div>
+    <div class="tt-detail">collected in this area</div>
+  `;
+  tooltip.style.left = (e.point.x + 14) + 'px';
+  tooltip.style.top = (e.point.y - 14) + 'px';
+  tooltip.style.display = 'block';
+});
+
+map.on('mouseleave', 'clusters', () => {
+  map.getCanvas().style.cursor = '';
+  tooltip.style.display = 'none';
+});
+
 // ── Satellite selection ───────────────────────────────────────────
 function selectSatellite(sat) {
   selectedSat = sat;
@@ -451,8 +547,9 @@ function deselectSatellite() {
   selectedSat = null;
   document.getElementById('sat-info').innerHTML = '';
 
-  // Clear footprints
+  // Clear footprints and clusters
   map.getSource('collection').setData({ type: 'FeatureCollection', features: [] });
+  map.getSource('clusters').setData({ type: 'FeatureCollection', features: [] });
 
   // Force immediate trail update
   lastTrailUpdate = 0;
