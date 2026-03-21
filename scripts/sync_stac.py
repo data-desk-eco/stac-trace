@@ -43,6 +43,11 @@ CQL2_FILTER = {
     "args": [{"property": "resolution"}, 1.5],
 }
 
+# Hosts where CQL2 returns incomplete results — use client-side filtering only
+NO_CQL2_HOSTS = {"planet"}
+# Hosts where global bbox returns truncated results — always use regions
+NO_GLOBAL_BBOX_HOSTS = {"planet"}
+
 TOKEN_REFRESH_SECS = 15 * 60  # refresh before 30min expiry
 
 
@@ -352,8 +357,9 @@ def main():
 
     load_dotenv()
 
-    end_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    start_date = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Use midnight timestamps — some hosts (e.g. Planet) return fewer results with mid-day times
+    end_date = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+    start_date = (datetime.now(timezone.utc) - timedelta(days=args.days)).strftime("%Y-%m-%dT00:00:00Z")
 
     db = duckdb.connect(args.db)
     ensure_schema(db)
@@ -376,10 +382,35 @@ def main():
         for host_idx, host in enumerate(hosts, 1):
             log.info(f"\n── [{host_idx}/{len(hosts)}] {host} ──")
 
+            use_cql2 = host not in NO_CQL2_HOSTS
+
+            # Some hosts truncate global bbox results — go straight to regions
+            if host in NO_GLOBAL_BBOX_HOSTS:
+                for region_name, bbox in REGIONS:
+                    try:
+                        fetched, new = stream_fetch_adaptive(
+                            client, token_mgr, db, host, bbox, start_date, end_date,
+                            use_cql2=use_cql2,
+                        )
+                        log.info(f"  {region_name}: {fetched} fetched, {new} new")
+                        grand_fetched += fetched
+                        grand_new += new
+                    except httpx.HTTPStatusError as e2:
+                        log.warning(f"  {region_name}: HTTP {e2.response.status_code}, skipping")
+                        continue
+                # Log and continue to next host
+                next_id = db.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM sync_log").fetchone()[0]
+                db.execute(
+                    "INSERT INTO sync_log (id, host, region, start_date, end_date, items_added) VALUES (?, ?, ?, ?, ?, ?)",
+                    [next_id, host, "regions", start_date, end_date, grand_new],
+                )
+                continue
+
             # Try global bbox first
             try:
                 fetched, new = stream_fetch_adaptive(
                     client, token_mgr, db, host, GLOBAL_BBOX, start_date, end_date,
+                    use_cql2=use_cql2,
                 )
                 log.info(f"  Global: {fetched} fetched, {new} new")
                 grand_fetched += fetched
@@ -396,6 +427,7 @@ def main():
                         try:
                             fetched, new = stream_fetch_adaptive(
                                 client, token_mgr, db, host, bbox, start_date, end_date,
+                                use_cql2=use_cql2,
                             )
                             log.info(f"  {region_name}: {fetched} fetched, {new} new")
                             grand_fetched += fetched
