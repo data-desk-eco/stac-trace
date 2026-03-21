@@ -36,8 +36,12 @@ jobs:
       - name: Fetch TLEs
         run: uv run scripts/fetch_tles.py
 
-      - name: Sync STAC data
-        run: uv run scripts/sync_stac.py --days 7
+      - name: Sync STAC data (active hosts only)
+        run: |
+          for host in oneatlas oneatlas-advanced 21at capellaspace planet; do
+            echo "--- Syncing $host ---"
+            uv run scripts/sync_stac.py --days 7 --host "$host" || true
+          done
         env:
           UP42_USERNAME: ${{ secrets.UP42_USERNAME }}
           UP42_PASSWORD: ${{ secrets.UP42_PASSWORD }}
