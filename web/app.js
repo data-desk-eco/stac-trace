@@ -703,15 +703,23 @@ map.on('mouseleave', 'sat-dots', () => {
 
 map.on('mousemove', 'footprints', (e) => {
   if (e.features.length === 0) return;
-  const f = e.features[0];
-  const p = f.properties;
-  const dt = p.datetime ? p.datetime.replace('T', ' ').replace(/:\d\d\.\d+.*/, ' UTC') : '';
-  const res = p.resolution ? `${p.resolution}m resolution` : '';
-  showTooltip(`
-    <div class="tt-title">${p.constellation || 'Unknown'}</div>
-    ${dt ? `<div class="tt-detail">${dt}</div>` : ''}
-    ${res ? `<div class="tt-detail">${res}</div>` : ''}
-  `, e);
+  // Dedupe by id (MapLibre can return same feature from multiple tiles)
+  const seen = new Set();
+  const unique = e.features.filter(f => {
+    if (seen.has(f.properties.id)) return false;
+    seen.add(f.properties.id);
+    return true;
+  });
+  const count = unique.length;
+  const header = count > 1 ? `<div class="tt-title">${count} images</div>` : '';
+  const items = unique.slice(0, 8).map(f => {
+    const p = f.properties;
+    const dt = p.datetime || '';
+    const res = p.resolution ? ` · ${p.resolution}m` : '';
+    return `<div class="tt-detail">${p.constellation} ${dt}${res}</div>`;
+  }).join('');
+  const more = count > 8 ? `<div class="tt-detail">+ ${count - 8} more</div>` : '';
+  showTooltip(header + items + more, e);
 });
 
 map.on('mouseleave', 'footprints', () => {
