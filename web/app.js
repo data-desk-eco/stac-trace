@@ -27,10 +27,10 @@ const DATA_BASE = 'data';
 // ── Trail config ──────────────────────────────────────────────────
 const TRAIL_UPDATE_MS = 5000;
 const TRAIL_BANDS = [
-  { from: 0,    to: 0.25, opacity: 0.5 },
-  { from: 0.25, to: 0.5,  opacity: 0.3 },
-  { from: 0.5,  to: 0.75, opacity: 0.15 },
-  { from: 0.75, to: 1.0,  opacity: 0.06 },
+  { from: 0,    to: 0.25, opacity: 0.3 },
+  { from: 0.25, to: 0.5,  opacity: 0.15 },
+  { from: 0.5,  to: 0.75, opacity: 0.08 },
+  { from: 0.75, to: 1.0,  opacity: 0.03 },
 ];
 const DIM_OPACITY = 0.08;
 
@@ -208,6 +208,7 @@ map.on('load', async () => {
       'line-color': ['get', 'color'],
       'line-width': ['get', 'width'],
       'line-opacity': ['get', 'opacity'],
+      'line-dasharray': [2, 3],
     },
   });
 
