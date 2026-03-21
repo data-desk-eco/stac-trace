@@ -428,6 +428,7 @@ async function startPlayback() {
   playbackTime = new Date(startDate + 'T00:00:00Z');
   document.getElementById('play-btn').textContent = '■';
   document.getElementById('play-btn').classList.add('playing');
+  map.setLayoutProperty('sat-dots', 'visibility', 'none');
 
   console.log(`Playback: ${playbackFeatures.length} footprints, ${startDate} to ${endDate}`);
   playbackTick();
@@ -442,6 +443,7 @@ function stopPlayback() {
 
   document.getElementById('play-btn').textContent = '▶';
   document.getElementById('play-btn').classList.remove('playing');
+  map.setLayoutProperty('sat-dots', 'visibility', 'visible');
 
   // Return to live mode
   loadFootprintsForRange();
@@ -462,8 +464,7 @@ function playbackTick() {
     return;
   }
 
-  // Propagate satellites to playback time
-  propagateSatellites(playbackTime);
+  // Hide satellites during playback (they move too fast to be useful)
 
   // Show footprints acquired up to playback time
   const currentMs = playbackTime.getTime();
