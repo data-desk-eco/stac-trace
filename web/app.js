@@ -289,12 +289,17 @@ map.on('load', async () => {
 });
 
 // ── Animation loop ────────────────────────────────────────────────
+let tickFrame = 0;
 function tick() {
   if (playing) return; // playback has its own loop
 
   const now = new Date();
   const nowMs = now.getTime();
-  propagateSatellites(now);
+
+  // Propagate every frame when selected (responsive), every 2nd frame otherwise
+  if (selectedSat || ++tickFrame % 2 === 0) {
+    propagateSatellites(now);
+  }
 
   if (selectedSat && nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
     lastTrailUpdate = nowMs;
@@ -304,16 +309,19 @@ function tick() {
   requestAnimationFrame(tick);
 }
 
+const _satFC = { type: 'FeatureCollection', features: [] };
 function propagateSatellites(time) {
   const features = [];
-  for (const sat of satellites) {
+  const hasSelection = selectedSat !== null;
+  const selectedId = hasSelection ? selectedSat.noradId : -1;
+
+  for (let j = 0, len = satellites.length; j < len; j++) {
+    const sat = satellites[j];
     if (disabledOperators.has(sat.operator)) continue;
     const pos = propagate(sat.satrec, time);
     if (!pos) continue;
 
-    const isSelected = selectedSat && sat.noradId === selectedSat.noradId;
-    const isDimmed = selectedSat && !isSelected;
-
+    const isSelected = hasSelection && sat.noradId === selectedId;
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [pos.lon, pos.lat] },
@@ -321,15 +329,16 @@ function propagateSatellites(time) {
         name: sat.name,
         operator: sat.operator,
         constellation: sat.constellation,
-        alt_km: Math.round(pos.alt_km),
+        alt_km: (pos.alt_km + 0.5) | 0,
         color: sat.color,
         noradId: sat.noradId,
         radius: isSelected ? 10 : 7,
-        dotOpacity: isDimmed ? DIM_OPACITY : 0.9,
+        dotOpacity: hasSelection && !isSelected ? DIM_OPACITY : 0.9,
       },
     });
   }
-  map.getSource('satellites').setData({ type: 'FeatureCollection', features });
+  _satFC.features = features;
+  map.getSource('satellites').setData(_satFC);
 }
 
 function getOrbitalPeriodMin(satrec) {
@@ -770,30 +779,33 @@ async function loadFootprintsForRange() {
   // Discard if a newer query was started while this one ran
   if (queryId !== footprintQueryId) return;
 
-  const features = [];
-  for (let i = 0; i < result.numRows; i++) {
-    const constellation = result.getChildAt(1).get(i);
-    const operator = CONSTELLATION_OPERATORS[constellation] || 'other';
-    const color = OPERATOR_COLORS[operator] || OPERATOR_COLORS.other;
-    const geojson = JSON.parse(result.getChildAt(4).get(i));
-    const dt = result.getChildAt(2).get(i);
+  // Extract Arrow columns once, then iterate — avoids repeated getChildAt overhead
+  const colId = result.getChildAt(0);
+  const colConst = result.getChildAt(1);
+  const colDt = result.getChildAt(2);
+  const colRes = result.getChildAt(3);
+  const colGeo = result.getChildAt(4);
+  const n = result.numRows;
 
-    features.push({
+  const features = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const constellation = colConst.get(i);
+    const color = OPERATOR_COLORS[CONSTELLATION_OPERATORS[constellation] || 'other'] || OPERATOR_COLORS.other;
+    features[i] = {
       type: 'Feature',
-      geometry: geojson,
+      geometry: JSON.parse(colGeo.get(i)),
       properties: {
-        id: result.getChildAt(0).get(i),
+        id: colId.get(i),
         constellation,
-        datetime: dt,
-        resolution: result.getChildAt(3).get(i),
+        datetime: colDt.get(i),
+        resolution: colRes.get(i),
         color,
-        outlineColor: color + '26', // hex + 15% alpha
       },
-    });
+    };
   }
 
   map.getSource('collection').setData({ type: 'FeatureCollection', features });
-  console.log(`Loaded ${features.length} footprints for ${startDate} to ${endDate}`);
+  console.log(`Loaded ${n} footprints for ${startDate} to ${endDate}`);
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
