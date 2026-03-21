@@ -315,11 +315,14 @@ function updateTrails(now) {
   if (!selectedSat) return;
   const sat = selectedSat;
 
-  // Trail covers from the earliest date in the slider to now
-  const startDate = dateCounts.length > 0
-    ? new Date(dateCounts[0].date + 'T00:00:00Z')
+  // Trail covers the selected date range
+  const rangeStartDate = rangeStart >= 0
+    ? new Date(dateCounts[rangeStart].date + 'T00:00:00Z')
     : new Date(now.getTime() - 7 * 86400000);
-  const totalSec = (now.getTime() - startDate.getTime()) / 1000;
+  const rangeEndDate = rangeEnd >= 0
+    ? new Date(dateCounts[rangeEnd].date + 'T23:59:59Z')
+    : now;
+  const totalSec = (rangeEndDate.getTime() - rangeStartDate.getTime()) / 1000;
   const periodMin = getOrbitalPeriodMin(sat.satrec);
   const periodSec = periodMin * 60;
   // Sample one point per ~30s of orbital time for smooth lines
@@ -328,10 +331,10 @@ function updateTrails(now) {
 
   const positions = [];
   for (let i = 0; i <= totalPoints; i++) {
-    const secAgo = i * stepSec;
-    const t = new Date(now.getTime() - secAgo * 1000);
+    const secFromEnd = i * stepSec;
+    const t = new Date(rangeEndDate.getTime() - secFromEnd * 1000);
     const pos = propagate(sat.satrec, t);
-    if (pos) positions.push([pos.lon, pos.lat, secAgo / totalSec]);
+    if (pos) positions.push([pos.lon, pos.lat, secFromEnd / totalSec]);
   }
 
   if (positions.length < 2) return;
@@ -462,7 +465,13 @@ function setRange(start, end, skipLoad) {
   rangeStart = start;
   rangeEnd = end;
   updateRangeUI();
-  if (!skipLoad) loadFootprintsForRange();
+  if (!skipLoad) {
+    loadFootprintsForRange();
+    if (selectedSat) {
+      lastTrailUpdate = 0;
+      updateTrails(new Date());
+    }
+  }
 }
 
 function initRangeInteraction() {
