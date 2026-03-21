@@ -392,10 +392,10 @@ async function startPlayback() {
 
   const result = await duckdbConn.query(`
     SELECT id, constellation,
-           STRFTIME(datetime, '%Y-%m-%dT%H:%M:%S') AS dt,
+           CAST(datetime AS VARCHAR)[:19] AS dt,
            resolution, geojson
     FROM '${parquetUrl()}'
-    WHERE STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') BETWEEN '${startDate}' AND '${endDate}'
+    WHERE CAST(datetime AS DATE) BETWEEN '${startDate}' AND '${endDate}'
       AND constellation IN (${inList})
     ORDER BY datetime
   `);
@@ -490,7 +490,7 @@ async function initDateSlider() {
   if (!duckdbConn) return;
 
   const result = await duckdbConn.query(`
-    SELECT STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') AS date, COUNT(*) AS n
+    SELECT CAST(CAST(datetime AS DATE) AS VARCHAR) AS date, COUNT(*) AS n
     FROM '${parquetUrl()}'
     GROUP BY date ORDER BY date
   `);
@@ -743,13 +743,15 @@ async function loadFootprintsForRange() {
   const startDate = dateCounts[rangeStart].date;
   const endDate = dateCounts[rangeEnd].date;
   const inList = constellations.map(c => `'${c}'`).join(', ');
+  const MAX_FEATURES = 50000;
   const result = await duckdbConn.query(`
     SELECT id, constellation,
-           STRFTIME(datetime, '%Y-%m-%d %H:%M') AS dt,
+           CAST(datetime AS VARCHAR)[:16] AS dt,
            resolution, geojson
     FROM '${parquetUrl()}'
-    WHERE STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') BETWEEN '${startDate}' AND '${endDate}'
+    WHERE CAST(datetime AS DATE) BETWEEN '${startDate}' AND '${endDate}'
       AND constellation IN (${inList})
+    LIMIT ${MAX_FEATURES}
   `);
 
   const features = [];

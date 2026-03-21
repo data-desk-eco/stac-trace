@@ -2,11 +2,36 @@
 # requires-python = ">=3.11"
 # dependencies = ["duckdb"]
 # ///
-"""Export DuckDB STAC items to GeoParquet for frontend querying."""
+"""Export DuckDB STAC items to GeoParquet for frontend querying.
+
+Simplifies geometries to bounding boxes for compact size and fast rendering.
+Sorted by date for efficient date-range queries via row group pruning.
+"""
 
 import argparse
+import json
 import os
 import duckdb
+
+
+def bbox_geojson(geom_str: str) -> str:
+    """Convert a GeoJSON geometry to its bounding box polygon."""
+    g = json.loads(geom_str)
+    coords = g.get("coordinates", [[]])
+    # Flatten all coordinate arrays
+    flat = coords[0] if g["type"] == "Polygon" else [c for ring in coords for c in ring[0]]
+    if not flat:
+        return geom_str
+    lons = [c[0] for c in flat]
+    lats = [c[1] for c in flat]
+    min_lon, max_lon = min(lons), max(lons)
+    min_lat, max_lat = min(lats), max(lats)
+    return json.dumps({
+        "type": "Polygon",
+        "coordinates": [[[min_lon, min_lat], [max_lon, min_lat],
+                         [max_lon, max_lat], [min_lon, max_lat],
+                         [min_lon, min_lat]]]
+    }, separators=(",", ":"))
 
 
 def main():
@@ -23,24 +48,40 @@ def main():
         where = f"WHERE CAST(properties->>'datetime' AS TIMESTAMP) >= CAST(current_date - INTERVAL '{args.days} days' AS TIMESTAMP)"
 
     count = db.execute(f"SELECT COUNT(*) FROM items {where}").fetchone()[0]
-    print(f"Exporting {count:,} items to {args.output}...")
+    print(f"Processing {count:,} items...")
 
-    db.execute(f"""
-        COPY (
-            SELECT
-                id,
-                properties->>'constellation' AS constellation,
-                CAST(properties->>'datetime' AS TIMESTAMP) AS datetime,
-                CAST(properties->>'resolution' AS DOUBLE) AS resolution,
-                geometry AS geojson
-            FROM items
-            {where}
-            ORDER BY constellation, datetime
-        ) TO '{args.output}'
-        WITH (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 10000)
+    # Fetch all items — we need to simplify geometries in Python
+    rows = db.execute(f"""
+        SELECT
+            id,
+            properties->>'constellation' AS constellation,
+            CAST(properties->>'datetime' AS TIMESTAMP) AS datetime,
+            CAST(properties->>'resolution' AS DOUBLE) AS resolution,
+            geometry
+        FROM items
+        {where}
+        ORDER BY datetime
+    """).fetchall()
+
+    # Simplify geometries to bounding boxes and write via DuckDB
+    simplified = []
+    for row in rows:
+        simplified.append((row[0], row[1], row[2], row[3], bbox_geojson(row[4])))
+
+    db2 = duckdb.connect()
+    db2.execute("""
+        CREATE TABLE export (
+            id VARCHAR, constellation VARCHAR, datetime TIMESTAMP,
+            resolution DOUBLE, geojson VARCHAR
+        )
+    """)
+    db2.executemany("INSERT INTO export VALUES (?, ?, ?, ?, ?)", simplified)
+    db2.execute(f"""
+        COPY export TO '{args.output}'
+        WITH (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 5000)
     """)
 
-    result = db.execute(f"""
+    result = db2.execute(f"""
         SELECT COUNT(*) as n, COUNT(DISTINCT constellation) as constellations
         FROM '{args.output}'
     """).fetchone()
@@ -50,6 +91,7 @@ def main():
     print(f"File size: {size_mb:.1f} MB")
 
     db.close()
+    db2.close()
 
 
 if __name__ == "__main__":
