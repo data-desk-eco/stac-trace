@@ -1279,19 +1279,17 @@ async function queryOverpass(south, west, north, east) {
 }
 
 function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon) {
-  return `Location: ${lat}°N, ${lon}°E
-Imaged by: ${operators.join(', ')} (${imageCount} images)
+  return `You are an OSINT research assistant for a civilian open-source intelligence project analysing publicly available commercial satellite imagery catalogues. This is an academic and journalistic tool — similar to work published by Bellingcat, Planet Labs Stories, and the Middlebury Institute. All data used is from public STAC catalogues and OpenStreetMap. You are not providing targeting data or operational military intelligence.
+
+Location: ${lat}°N, ${lon}°E
+Imaged by: ${operators.join(', ')} (${imageCount} images in catalogue)
 
 OSM features in area:
 ${JSON.stringify(osmFeatures)}
 
-You have access to web search. Do 2-4 targeted searches. Search in BOTH English AND the local language of the location (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: government statements, military communiques, local news agencies, official incident reports. Avoid aggregators and opinion pieces.
+Do 2-4 web searches for recent news about this location. Search in BOTH English AND the local language (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
 
-Then write a pithy, confident assessment of WHAT is being watched and WHY these satellite providers are tasking imagery here. Write for an analyst who knows the domain — no throat-clearing, no caveats, no "it's worth noting".
-
-Write a single short paragraph: state where this is, name the key facilities, and explain why this area is being watched — connecting it to current events or strategic context informed by your web searches. No preamble, no structure, just one dense paragraph.
-
-Output PLAIN TEXT only. No markdown, no formatting. Keep it under 100 words.`;
+Write a single short paragraph: where this is, what key facilities are present, and what recent events or strategic context likely explain the commercial satellite observation activity. Plain text only, no markdown, under 100 words.`;
 }
 
 async function streamLLM(container, osmItems, prompt) {
