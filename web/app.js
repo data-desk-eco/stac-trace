@@ -205,8 +205,19 @@ map.on('load', async () => {
     source: 'collection',
     paint: {
       'fill-color': ['get', 'color'],
-      'fill-opacity': 0.25,
-      'fill-outline-color': ['get', 'outlineColor'],
+      'fill-opacity': 0.15,
+    },
+  });
+
+  // Footprint outlines (visible when zoomed in)
+  map.addLayer({
+    id: 'footprint-outlines',
+    type: 'line',
+    source: 'collection',
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-width': 0.5,
+      'line-opacity': 0.3,
     },
   });
 
@@ -237,16 +248,13 @@ map.on('load', async () => {
     },
   });
 
-  // Load data in parallel
-  setLoadingStatus('Loading satellite data...');
-  const [tleText, metaJson, conn] = await Promise.all([
+  // Load TLE data first (fast, small files) — show satellites immediately
+  setLoadingStatus('Loading satellites...');
+  const [tleText, metaJson] = await Promise.all([
     fetch(`${DATA_BASE}/tles.txt`).then(r => r.ok ? r.text() : ''),
     fetch(`${DATA_BASE}/satellites.json`).then(r => r.ok ? r.json() : {}),
-    initDuckDB(),
   ]);
-  duckdbConn = conn;
 
-  // Parse TLEs and merge metadata
   const tles = parseTLEs(tleText);
   satellites = tles.map(tle => {
     const noradId = extractNoradId(tle.line1);
@@ -264,17 +272,20 @@ map.on('load', async () => {
   });
 
   console.log(`Loaded ${satellites.length} satellites`);
-
-  // Build legend
   buildLegend();
 
-  // Load date histogram and init slider
-  setLoadingStatus('Loading imagery dates...');
-  await initDateSlider();
-
-  // Ready
+  // Start satellite animation immediately — don't wait for duckdb
   dismissLoading();
   tick();
+
+  // Load duckdb + date slider in background (heavier, ~4MB WASM download)
+  initDuckDB().then(async (conn) => {
+    duckdbConn = conn;
+    console.log('DuckDB ready');
+    await initDateSlider();
+  }).catch(err => {
+    console.error('DuckDB init failed:', err);
+  });
 });
 
 // ── Animation loop ────────────────────────────────────────────────
@@ -714,6 +725,7 @@ function initRangeInteraction() {
 }
 
 // ── Footprint loading ────────────────────────────────────────────
+let footprintQueryId = 0; // monotonic ID to cancel stale queries
 function getEnabledConstellations() {
   // Get STAC constellation names for operators that are in the legend and not disabled
   const legendOperators = new Set(satellites.map(s => s.operator));
@@ -733,6 +745,7 @@ function getEnabledConstellations() {
 
 async function loadFootprintsForRange() {
   if (!duckdbConn || rangeStart < 0) return;
+  const queryId = ++footprintQueryId;
 
   const constellations = getEnabledConstellations();
   if (constellations.length === 0) {
@@ -753,6 +766,9 @@ async function loadFootprintsForRange() {
       AND constellation IN (${inList})
     LIMIT ${MAX_FEATURES}
   `);
+
+  // Discard if a newer query was started while this one ran
+  if (queryId !== footprintQueryId) return;
 
   const features = [];
   for (let i = 0; i < result.numRows; i++) {
