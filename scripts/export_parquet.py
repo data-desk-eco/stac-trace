@@ -20,7 +20,7 @@ def main():
 
     where = ""
     if args.days:
-        where = f"WHERE CAST(properties->>'datetime' AS TIMESTAMP) >= current_timestamp - INTERVAL '{args.days} days'"
+        where = f"WHERE CAST(properties->>'datetime' AS TIMESTAMP) >= CAST(current_date - INTERVAL '{args.days} days' AS TIMESTAMP)"
 
     count = db.execute(f"SELECT COUNT(*) FROM items {where}").fetchone()[0]
     print(f"Exporting {count:,} items to {args.output}...")
