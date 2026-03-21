@@ -233,7 +233,14 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 
 #date-slider {
     flex: 1;
+    min-width: 0;
     padding: 12px 20px 8px;
+    position: relative;
+}
+
+#date-slider,
+#play-btn {
+    /* Override .panel absolute positioning inside flex wrapper */
     position: relative;
 }
 
