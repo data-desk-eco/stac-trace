@@ -27,6 +27,7 @@ const CONSTELLATION_MAP = {
 };
 
 const DATA_BASE = 'data';
+const HAS_ANALYSIS = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
 // ── Trail config ──────────────────────────────────────────────────
 const TRAIL_UPDATE_MS = 5000;
@@ -100,6 +101,12 @@ const map = new maplibregl.Map({
         tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png'],
         tileSize: 256,
       },
+      satellite: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        maxzoom: 19,
+      },
       labels: {
         type: 'vector',
         url: 'https://tiles.openfreemap.org/planet',
@@ -107,6 +114,7 @@ const map = new maplibregl.Map({
     },
     layers: [
       { id: 'basemap', type: 'raster', source: 'carto' },
+      { id: 'satellite-basemap', type: 'raster', source: 'satellite', layout: { visibility: 'none' }, paint: { 'raster-saturation': -1, 'raster-brightness-max': 0.45 } },
       {
         id: 'country-borders', type: 'line', source: 'labels',
         'source-layer': 'boundary',
@@ -204,6 +212,11 @@ map.on('load', async () => {
     data: { type: 'FeatureCollection', features: [] },
   });
 
+  map.addSource('pois', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
   // Footprint polygons (below trails and satellites)
   map.addLayer({
     id: 'footprints',
@@ -249,6 +262,35 @@ map.on('load', async () => {
     },
   });
 
+  // Selected cluster halo
+  map.addSource('cluster-halo', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  map.addLayer({
+    id: 'cluster-halo',
+    type: 'line',
+    source: 'cluster-halo',
+    paint: {
+      'line-color': '#ffffff',
+      'line-width': 2.5,
+      'line-opacity': 0.9,
+    },
+  });
+
+  map.addLayer({
+    id: 'cluster-halo-glow',
+    type: 'line',
+    source: 'cluster-halo',
+    paint: {
+      'line-color': '#ffffff',
+      'line-width': 8,
+      'line-opacity': 0.15,
+      'line-blur': 6,
+    },
+  });
+
   // Satellite trail (shown on selection)
   map.addLayer({
     id: 'selected-trail',
@@ -273,6 +315,43 @@ map.on('load', async () => {
       'circle-stroke-color': ['get', 'color'],
       'circle-stroke-width': 1.5,
       'circle-stroke-opacity': ['get', 'dotOpacity'],
+    },
+  });
+
+  // POI markers from Overpass — icon + name
+  map.addLayer({
+    id: 'poi-icons',
+    type: 'symbol',
+    source: 'pois',
+    layout: {
+      'text-field': ['get', 'icon'],
+      'text-size': 14,
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+      'text-font': ['Noto Sans Regular'],
+    },
+    paint: {
+      'text-color': '#ffffff',
+    },
+  });
+
+  map.addLayer({
+    id: 'poi-labels',
+    type: 'symbol',
+    source: 'pois',
+    layout: {
+      'text-field': ['get', 'name'],
+      'text-size': 11,
+      'text-font': ['Noto Sans Regular'],
+      'text-offset': [0, 0.8],
+      'text-anchor': 'top',
+      'text-max-width': 10,
+    },
+    paint: {
+      'text-color': '#ffffff',
+      'text-halo-color': 'rgba(0, 0, 0, 0.8)',
+      'text-halo-width': 1,
+      'text-opacity': 0.85,
     },
   });
 
@@ -797,7 +876,6 @@ async function loadFootprintsForRange() {
   const startDate = dateCounts[rangeStart].date;
   const endDate = dateCounts[rangeEnd].date;
   const inList = constellations.map(c => `'${c}'`).join(', ');
-  const MAX_FEATURES = 50000;
   const result = await duckdbConn.query(`
     SELECT id, constellation,
            CAST(datetime AS VARCHAR)[:16] AS dt,
@@ -805,7 +883,6 @@ async function loadFootprintsForRange() {
     FROM '${parquetUrl()}'
     WHERE CAST(datetime AS DATE) BETWEEN '${startDate}' AND '${endDate}'
       AND constellation IN (${inList})
-    LIMIT ${MAX_FEATURES}
   `);
 
   // Discard if a newer query was started while this one ran
@@ -1119,7 +1196,230 @@ map.on('click', 'sat-dots', (e) => {
   e.originalEvent.stopPropagation();
 });
 
+// ── Area enrichment (Overpass + LLM) ──────────────────────────────
+let enrichRequestId = 0;
+const OVERPASS_ENDPOINTS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+
+// Broad query: all named features with strategically interesting tags
+function buildOverpassQuery(south, west, north, east) {
+  const bbox = `${south},${west},${north},${east}`;
+  return `[out:json][timeout:10];(
+    nwr["military"](${bbox});
+    nwr["landuse"="military"](${bbox});
+    nwr["aeroway"="aerodrome"](${bbox});
+    nwr["aeroway"="helipad"](${bbox});
+    nwr["landuse"="port"](${bbox});
+    nwr["industrial"="port"](${bbox});
+    nwr["power"="plant"](${bbox});
+    nwr["plant:source"="nuclear"](${bbox});
+    nwr["generator:source"="nuclear"](${bbox});
+    nwr["amenity"="embassy"](${bbox});
+    nwr["amenity"="prison"](${bbox});
+    nwr["man_made"="works"](${bbox});
+    nwr["man_made"="petroleum_well"](${bbox});
+    nwr["man_made"="pipeline"](${bbox});
+    nwr["office"="government"](${bbox});
+    nwr["building"="government"](${bbox});
+    nwr["amenity"="fuel"]["capacity"](${bbox});
+    nwr["landuse"="reservoir"](${bbox});
+    nwr["man_made"="water_works"](${bbox});
+    nwr["man_made"="wastewater_plant"](${bbox});
+    nwr["telecom"](${bbox});
+    nwr["man_made"="communications_tower"](${bbox});
+    nwr["railway"="station"](${bbox});
+  );out center tags;`;
+}
+
+// Distil Overpass elements to a compact summary for the LLM
+function summariseElements(elements) {
+  const items = [];
+  const seen = new Set();
+  for (const el of elements) {
+    if (!el.tags) continue;
+    const name = el.tags['name:en'] || el.tags.name || '';
+    const lat = el.center ? el.center.lat : el.lat;
+    const lon = el.center ? el.center.lon : el.lon;
+    // Keep key tags, drop noise
+    const keep = {};
+    for (const [k, v] of Object.entries(el.tags)) {
+      if (['source', 'source:date', 'created_by', 'note', 'fixme', 'FIXME',
+           'addr:housenumber', 'addr:street', 'addr:city', 'addr:postcode',
+           'building:levels', 'roof:shape', 'roof:material'].includes(k)) continue;
+      if (k.startsWith('name:') && k !== 'name:en') continue;
+      keep[k] = v;
+    }
+    const key = `${name}:${JSON.stringify(keep)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ name, lat, lon, tags: keep });
+  }
+  return items;
+}
+
+async function queryOverpass(south, west, north, east) {
+  const query = buildOverpassQuery(south, west, north, east);
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        body: `data=${encodeURIComponent(query)}`,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      if (resp.status === 429 || resp.status === 504) continue;
+      if (!resp.ok) throw new Error(`Overpass ${resp.status}`);
+      return await resp.json();
+    } catch (err) {
+      console.warn(`Overpass (${endpoint}) failed:`, err);
+    }
+  }
+  return null;
+}
+
+function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon) {
+  return `Location: ${lat}°N, ${lon}°E
+Imaged by: ${operators.join(', ')} (${imageCount} images)
+
+OSM features in area:
+${JSON.stringify(osmFeatures)}
+
+You have access to web search. Search for recent news and context about this specific location and any key facilities listed above. Do 2-4 targeted searches.
+
+Then write a pithy, confident assessment of WHAT is being watched and WHY these satellite providers are tasking imagery here. Write for an analyst who knows the domain — no throat-clearing, no caveats, no "it's worth noting".
+
+Write a single short paragraph: state where this is, name the key facilities, and explain why this area is being watched — connecting it to current events or strategic context informed by your web searches. No preamble, no structure, just one dense paragraph.
+
+Output PLAIN TEXT only. No markdown, no formatting. Keep it under 100 words.`;
+}
+
+async function streamLLM(container, osmItems, prompt) {
+  // Place POI markers on map
+  const mapFeatures = osmItems
+    .filter(it => it.lat != null && it.lon != null && it.name)
+    .map(it => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [it.lon, it.lat] },
+      properties: { icon: '·', name: it.name },
+    }));
+  if (map.getSource('pois')) {
+    map.getSource('pois').setData({ type: 'FeatureCollection', features: mapFeatures });
+  }
+
+  container.innerHTML = '<div class="enrich-status">Connecting...</div><div class="enrich-report" style="display:none"><p class="enrich-para"></p></div>';
+  const statusEl = container.querySelector('.enrich-status');
+  const reportEl = container.querySelector('.enrich-report');
+  const paraEl = container.querySelector('.enrich-para');
+
+  try {
+    const resp = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!resp.ok) throw new Error(`API ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let searchCount = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6);
+        if (payload === '[DONE]') continue;
+
+        let event;
+        try { event = JSON.parse(payload); } catch { continue; }
+
+        if (event.type === 'assistant' && event.message?.content) {
+          for (const block of event.message.content) {
+            if (block.type === 'text' && block.text) {
+              text += block.text;
+              paraEl.textContent = text;
+              reportEl.style.display = '';
+              statusEl.style.display = 'none';
+            }
+            if (block.type === 'tool_use' && block.name === 'WebSearch') {
+              searchCount++;
+              const query = block.input?.query || '';
+              statusEl.textContent = `Searching: ${query}`;
+              statusEl.style.display = '';
+            }
+            if (block.type === 'tool_use' && block.name === 'WebFetch') {
+              statusEl.textContent = `Reading: ${block.input?.url || ''}`;
+              statusEl.style.display = '';
+            }
+          }
+        }
+      }
+    }
+
+    statusEl.style.display = 'none';
+    if (!text) {
+      reportEl.style.display = 'none';
+      container.innerHTML = '<span class="enrich-empty">Analysis unavailable</span>';
+    }
+
+  } catch (err) {
+    console.warn('LLM stream failed:', err);
+    statusEl.style.display = 'none';
+    if (osmItems.length > 0) {
+      const named = osmItems.filter(it => it.name).slice(0, 12);
+      container.innerHTML = named.map(it =>
+        `<div class="poi-clickable" data-lat="${it.lat}" data-lon="${it.lon}">${it.name}</div>`
+      ).join('');
+      container.querySelectorAll('.poi-clickable').forEach(row => {
+        row.addEventListener('click', () => {
+          map.flyTo({ center: [parseFloat(row.dataset.lon), parseFloat(row.dataset.lat)], zoom: 14, duration: 1500 });
+        });
+      });
+    } else {
+      container.innerHTML = '<span class="enrich-empty">Analysis unavailable</span>';
+    }
+  }
+}
+
+function clearPOIs() {
+  if (map.getSource('pois')) {
+    map.getSource('pois').setData({ type: 'FeatureCollection', features: [] });
+  }
+}
+
+function highlightCluster(feature) {
+  const haloData = { type: 'FeatureCollection', features: [] };
+  if (feature) {
+    // Reconstruct a clean GeoJSON feature to avoid serialization issues
+    haloData.features = [{
+      type: 'Feature',
+      geometry: JSON.parse(JSON.stringify(feature.geometry)),
+      properties: {},
+    }];
+  }
+  map.getSource('cluster-halo').setData(haloData);
+  // Dim other layers
+  map.setPaintProperty('footprints', 'fill-opacity', feature ? 0.05 : 0.15);
+  map.setPaintProperty('footprint-outlines', 'line-opacity', feature ? 0.1 : 0.3);
+  map.setPaintProperty('footprint-overlap', 'line-opacity', feature ? 0.2 : 0.6);
+}
+
+function setSatelliteBasemap(on) {
+  map.setLayoutProperty('basemap', 'visibility', on ? 'none' : 'visible');
+  map.setLayoutProperty('satellite-basemap', 'visibility', on ? 'visible' : 'none');
+}
+
 map.on('click', 'footprint-overlap-fill', (e) => {
+  const id = ++enrichRequestId;
   const f = e.features[0];
   const operators = JSON.parse(f.properties.operators);
   const images = JSON.parse(f.properties.images);
@@ -1141,15 +1441,46 @@ map.on('click', 'footprint-overlap-fill', (e) => {
     </div>`;
   }).join('');
 
+  const pad = 0.05;
+  const south = Math.min(coords[0][1], coords[2][1]) - pad;
+  const north = Math.max(coords[0][1], coords[2][1]) + pad;
+  const west = Math.min(coords[0][0], coords[2][0]) - pad;
+  const east = Math.max(coords[0][0], coords[2][0]) + pad;
+
+  const analysisHtml = HAS_ANALYSIS
+    ? `<div class="card-section-label">Analysis</div><div id="enrich-results" class="enrich-loading">Querying area...</div>`
+    : '';
+
   document.getElementById('card-title').textContent = `${operators.length} providers · ${images.length} images`;
   document.getElementById('card-body').innerHTML = `
     <div class="card-operators">${opBadges}</div>
-    <div class="card-coords">${cLat}° N, ${cLon}° E</div>
+    <a class="card-coords" href="https://earth.google.com/web/@${cLat},${cLon},0a,5000d,35y,0h,0t,0r" target="_blank" rel="noopener">${cLat}° N, ${cLon}° E</a>
     <div class="card-section-label">Images</div>
     ${imageRows}
-    <div class="card-enrich-placeholder">Enrichment from news sources coming soon</div>
+    ${analysisHtml}
   `;
   document.getElementById('overlap-card').classList.add('visible');
+  setSatelliteBasemap(true);
+  highlightCluster(f);
+
+  if (HAS_ANALYSIS) {
+    // Pipeline: Overpass → summarise → stream LLM
+    (async () => {
+      const el = () => id === enrichRequestId ? document.getElementById('enrich-results') : null;
+
+      const overpassData = await queryOverpass(south, west, north, east);
+      if (id !== enrichRequestId) return;
+
+      const osmItems = overpassData?.elements ? summariseElements(overpassData.elements) : [];
+      const prompt = buildLLMPrompt(osmItems, operators, images.length, cLat, cLon);
+
+      const target = el();
+      if (!target) return;
+
+      await streamLLM(target, osmItems, prompt);
+    })();
+  }
+
   e.originalEvent.stopPropagation();
 });
 
@@ -1163,6 +1494,9 @@ map.on('mouseleave', 'footprint-overlap-fill', () => {
 
 document.getElementById('card-close').addEventListener('click', () => {
   document.getElementById('overlap-card').classList.remove('visible');
+  clearPOIs();
+  setSatelliteBasemap(false);
+  highlightCluster(null);
 });
 
 map.on('click', (e) => {
@@ -1170,6 +1504,9 @@ map.on('click', (e) => {
   const overlapHit = map.queryRenderedFeatures(e.point, { layers: ['footprint-overlap-fill'] });
   if (overlapHit.length === 0) {
     document.getElementById('overlap-card').classList.remove('visible');
+    clearPOIs();
+    setSatelliteBasemap(false);
+  highlightCluster(null);
   }
   if (selectedSat === null) return;
   const features = map.queryRenderedFeatures(e.point, { layers: ['sat-dots'] });
