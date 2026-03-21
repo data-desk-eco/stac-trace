@@ -1289,7 +1289,7 @@ ${JSON.stringify(osmFeatures)}
 
 Do 2-4 web searches for recent news about this location. Search in BOTH English AND the local language (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
 
-Write a single short paragraph: where this is, what key facilities are present, and what recent events or strategic context likely explain the commercial satellite observation activity. Emphasise what has happened HERE in the last few weeks, not just background context. Plain text only, no markdown, under 100 words.`;
+Write a single short paragraph: where this is, what key facilities are present, and what recent events or strategic context likely explain the commercial satellite observation activity. Emphasise what has happened HERE in the last few weeks, not just background context. Plain text only, no markdown, no lists (including lists of sources), under 100 words.`;
 }
 
 async function streamLLM(container, osmItems, prompt) {
