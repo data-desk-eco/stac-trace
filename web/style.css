@@ -148,8 +148,8 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 /* --- Legend --- */
 
 #legend {
-    top: var(--edge-spacing);
-    right: var(--edge-spacing);
+    bottom: 90px;
+    left: var(--edge-spacing);
     padding: 12px 14px;
     z-index: 10;
 }
@@ -188,6 +188,137 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
     color: var(--text-faint);
     font-variant-numeric: tabular-nums;
     margin-left: 10px;
+}
+
+/* --- Overlap card --- */
+
+#overlap-card {
+    top: var(--edge-spacing);
+    right: var(--edge-spacing);
+    width: 300px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    z-index: 10;
+    display: none;
+}
+
+#overlap-card.visible { display: block; }
+
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.card-header h4 {
+    margin: 0;
+    font-size: var(--font-base);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.close-btn {
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 18px;
+    line-height: 1;
+    padding: 0 0 0 12px;
+    transition: color 0.15s;
+}
+
+.close-btn:hover { color: var(--text-primary); }
+
+#card-body {
+    padding: 12px 16px;
+}
+
+.card-operators {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.card-op-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--font-xs);
+    color: var(--text-secondary);
+    padding: 3px 8px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+}
+
+.card-op-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.card-coords {
+    font-size: var(--font-xs);
+    color: var(--text-faint);
+    margin-bottom: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.card-section-label {
+    font-size: var(--font-xs);
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 12px 0 6px;
+}
+
+.card-image-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.card-image-row:last-child { border-bottom: none; }
+
+.card-image-op {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.card-image-id {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: var(--font-xs);
+}
+
+.card-image-dt {
+    color: var(--text-faint);
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.card-enrich-placeholder {
+    margin-top: 12px;
+    padding: 10px;
+    border: 1px dashed var(--border-light);
+    border-radius: 4px;
+    font-size: var(--font-xs);
+    color: var(--text-hint);
+    text-align: center;
+    line-height: 1.5;
 }
 
 /* --- Tooltip --- */
@@ -386,9 +517,9 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 
 /* --- Scrollbar --- */
 
-#panel::-webkit-scrollbar { width: 4px; }
-#panel::-webkit-scrollbar-track { background: transparent; }
-#panel::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); }
+#panel::-webkit-scrollbar, #overlap-card::-webkit-scrollbar { width: 4px; }
+#panel::-webkit-scrollbar-track, #overlap-card::-webkit-scrollbar-track { background: transparent; }
+#panel::-webkit-scrollbar-thumb, #overlap-card::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); }
 
 /* --- Mobile --- */
 
@@ -402,9 +533,18 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
     #panel h1 { font-size: 16px; }
 
     #legend {
-        top: 8px;
-        right: 8px;
+        bottom: 80px;
+        left: 8px;
         padding: 8px 10px;
+    }
+
+    #overlap-card {
+        top: auto;
+        bottom: 8px;
+        right: 8px;
+        left: 8px;
+        width: auto;
+        max-height: 45vh;
     }
 
     #date-slider-wrap {

@@ -54,6 +54,7 @@ let playbackTime = null;     // Date object for current playback time
 let playbackFeatures = [];   // all footprints for range, sorted by datetime
 let playbackSpeed = 3600;    // seconds of real time per animation frame (~1hr/frame)
 let playbackRafId = null;
+let playbackOverlaps = [];   // precomputed overlap features with timestamps
 
 // ── TLE parsing ───────────────────────────────────────────────────
 function parseTLEs(text) {
@@ -193,6 +194,11 @@ map.on('load', async () => {
     data: { type: 'FeatureCollection', features: [] },
   });
 
+  map.addSource('overlaps', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
   map.addSource('selected-trail', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -218,6 +224,28 @@ map.on('load', async () => {
       'line-color': ['get', 'color'],
       'line-width': 0.5,
       'line-opacity': 0.3,
+    },
+  });
+
+  // Invisible fill for overlap click target (must be above footprints fill)
+  map.addLayer({
+    id: 'footprint-overlap-fill',
+    type: 'fill',
+    source: 'overlaps',
+    paint: {
+      'fill-color': 'transparent',
+    },
+  });
+
+  // White outline for multi-provider overlap intersections
+  map.addLayer({
+    id: 'footprint-overlap',
+    type: 'line',
+    source: 'overlaps',
+    paint: {
+      'line-color': '#ffffff',
+      'line-width': 1,
+      'line-opacity': 0.6,
     },
   });
 
@@ -443,6 +471,7 @@ async function startPlayback() {
     });
   }
 
+  playbackOverlaps = computeOverlapFeatures(playbackFeatures, true);
   dismissLoading();
 
   playing = true;
@@ -459,6 +488,7 @@ function stopPlayback() {
   playing = false;
   playbackTime = null;
   playbackFeatures = [];
+  playbackOverlaps = [];
   if (playbackRafId) cancelAnimationFrame(playbackRafId);
   playbackRafId = null;
 
@@ -491,6 +521,7 @@ function playbackTick() {
   const currentMs = playbackTime.getTime();
   const visible = playbackFeatures.filter(f => f.timestamp <= currentMs);
   map.getSource('collection').setData({ type: 'FeatureCollection', features: visible });
+  map.getSource('overlaps').setData({ type: 'FeatureCollection', features: playbackOverlaps.filter(f => f.timestamp <= currentMs) });
 
   // Update slider label to show playback time
   const progress = (currentMs - startTime) / (endTime - startTime);
@@ -759,6 +790,7 @@ async function loadFootprintsForRange() {
   const constellations = getEnabledConstellations();
   if (constellations.length === 0) {
     map.getSource('collection').setData({ type: 'FeatureCollection', features: [] });
+    map.getSource('overlaps').setData({ type: 'FeatureCollection', features: [] });
     return;
   }
 
@@ -804,15 +836,160 @@ async function loadFootprintsForRange() {
     };
   }
 
+  const overlaps = computeOverlapFeatures(features);
   map.getSource('collection').setData({ type: 'FeatureCollection', features });
-  console.log(`Loaded ${n} footprints for ${startDate} to ${endDate}`);
+  map.getSource('overlaps').setData({ type: 'FeatureCollection', features: overlaps });
+  console.log(`Loaded ${n} footprints, ${overlaps.length} overlaps for ${startDate} to ${endDate}`);
+}
+
+// ── Multi-provider overlap detection ──────────────────────────────
+// Returns GeoJSON features for the intersection rectangles of footprints
+// from different operators. Since footprints are axis-aligned bounding boxes,
+// each intersection is also a simple bbox.
+// Compute intersection rectangles between footprints from different operators.
+// Footprints are axis-aligned bounding boxes so each intersection is a simple bbox.
+// If withTimestamps is true, each overlap gets the later feature's timestamp
+// (for playback: the overlap appears when the second image is acquired).
+function computeOverlapFeatures(features, withTimestamps) {
+  const CELL = 1; // 1° grid cells
+  const grid = {};
+
+  // Index features into grid cells
+  const boxes = new Array(features.length);
+  for (let i = 0; i < features.length; i++) {
+    const coords = features[i].geometry.coordinates[0];
+    const minLon = coords[0][0], minLat = coords[0][1];
+    const maxLon = coords[2][0], maxLat = coords[2][1];
+    const op = CONSTELLATION_OPERATORS[features[i].properties.constellation] || 'other';
+    boxes[i] = { minLon, minLat, maxLon, maxLat, op };
+
+    const x0 = Math.floor(minLon / CELL), x1 = Math.floor(maxLon / CELL);
+    const y0 = Math.floor(minLat / CELL), y1 = Math.floor(maxLat / CELL);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const key = (cx << 16) ^ cy;
+        if (!grid[key]) grid[key] = [];
+        grid[key].push(i);
+      }
+    }
+  }
+
+  // Find intersection rectangles between different operators
+  const seen = new Set();
+  const rects = []; // {minLon, minLat, maxLon, maxLat, ts}
+  for (const indices of Object.values(grid)) {
+    if (indices.length < 2) continue;
+    for (let a = 0; a < indices.length; a++) {
+      const ia = indices[a], ba = boxes[ia];
+      for (let b = a + 1; b < indices.length; b++) {
+        const ib = indices[b], bb = boxes[ib];
+        if (ba.op === bb.op) continue;
+        const pairKey = ia < ib ? ia * features.length + ib : ib * features.length + ia;
+        if (seen.has(pairKey)) continue;
+        seen.add(pairKey);
+        const iMinLon = Math.max(ba.minLon, bb.minLon);
+        const iMaxLon = Math.min(ba.maxLon, bb.maxLon);
+        const iMinLat = Math.max(ba.minLat, bb.minLat);
+        const iMaxLat = Math.min(ba.maxLat, bb.maxLat);
+        if (iMinLon >= iMaxLon || iMinLat >= iMaxLat) continue;
+        const r = { minLon: iMinLon, minLat: iMinLat, maxLon: iMaxLon, maxLat: iMaxLat,
+                    pairs: [{ opA: ba.op, opB: bb.op, idA: features[ia].properties.id, idB: features[ib].properties.id,
+                              dtA: features[ia].properties.datetime, dtB: features[ib].properties.datetime }] };
+        if (withTimestamps) r.ts = Math.max(features[ia].timestamp, features[ib].timestamp);
+        rects.push(r);
+      }
+    }
+  }
+
+  // Union-find to merge overlapping rectangles into clusters
+  const parent = rects.map((_, i) => i);
+  function find(x) { while (parent[x] !== x) x = parent[x] = parent[parent[x]]; return x; }
+  function unite(a, b) { parent[find(a)] = find(b); }
+
+  // Index rects into coarse grid for fast overlap checks
+  const rGrid = {};
+  const RC = 0.5;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    const x0 = Math.floor(r.minLon / RC), x1 = Math.floor(r.maxLon / RC);
+    const y0 = Math.floor(r.minLat / RC), y1 = Math.floor(r.maxLat / RC);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const key = (cx << 16) ^ cy;
+        const cell = rGrid[key];
+        if (cell) {
+          for (const j of cell) {
+            const s = rects[j];
+            if (r.minLon <= s.maxLon && r.maxLon >= s.minLon &&
+                r.minLat <= s.maxLat && r.maxLat >= s.minLat) {
+              unite(i, j);
+            }
+          }
+          cell.push(i);
+        } else {
+          rGrid[key] = [i];
+        }
+      }
+    }
+  }
+
+  // Merge each cluster into its bounding box
+  const clusters = {};
+  for (let i = 0; i < rects.length; i++) {
+    const root = find(i);
+    const r = rects[i];
+    if (!clusters[root]) {
+      clusters[root] = { minLon: r.minLon, minLat: r.minLat, maxLon: r.maxLon, maxLat: r.maxLat, ts: r.ts || 0, pairs: [...r.pairs] };
+    } else {
+      const c = clusters[root];
+      c.minLon = Math.min(c.minLon, r.minLon);
+      c.minLat = Math.min(c.minLat, r.minLat);
+      c.maxLon = Math.max(c.maxLon, r.maxLon);
+      c.maxLat = Math.max(c.maxLat, r.maxLat);
+      if (r.ts > c.ts) c.ts = r.ts;
+      c.pairs.push(...r.pairs);
+    }
+  }
+
+  const overlaps = [];
+  for (const c of Object.values(clusters)) {
+    // Deduplicate operators and collect unique image IDs
+    const ops = new Set();
+    const images = [];
+    const seenIds = new Set();
+    for (const p of c.pairs) {
+      ops.add(p.opA); ops.add(p.opB);
+      if (!seenIds.has(p.idA)) { seenIds.add(p.idA); images.push({ id: p.idA, op: p.opA, dt: p.dtA }); }
+      if (!seenIds.has(p.idB)) { seenIds.add(p.idB); images.push({ id: p.idB, op: p.opB, dt: p.dtB }); }
+    }
+    images.sort((a, b) => a.dt < b.dt ? -1 : 1);
+    const f = {
+      type: 'Feature',
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[c.minLon, c.minLat], [c.maxLon, c.minLat],
+                       [c.maxLon, c.maxLat], [c.minLon, c.maxLat],
+                       [c.minLon, c.minLat]]],
+      },
+      properties: {
+        operators: JSON.stringify([...ops]),
+        imageCount: seenIds.size,
+        images: JSON.stringify(images),
+      },
+    };
+    if (withTimestamps) f.timestamp = c.ts;
+    overlaps.push(f);
+  }
+  return overlaps;
 }
 
 // ── Legend ─────────────────────────────────────────────────────────
 function buildLegend() {
   const container = document.getElementById('legend-items');
+  const operatorsWithFootprints = new Set(Object.values(CONSTELLATION_OPERATORS));
   const operators = {};
   for (const sat of satellites) {
+    if (!operatorsWithFootprints.has(sat.operator)) continue;
     operators[sat.operator] = (operators[sat.operator] || 0) + 1;
   }
 
@@ -942,7 +1119,58 @@ map.on('click', 'sat-dots', (e) => {
   e.originalEvent.stopPropagation();
 });
 
+map.on('click', 'footprint-overlap-fill', (e) => {
+  const f = e.features[0];
+  const operators = JSON.parse(f.properties.operators);
+  const images = JSON.parse(f.properties.images);
+  const coords = f.geometry.coordinates[0];
+  const cLat = ((coords[0][1] + coords[2][1]) / 2).toFixed(3);
+  const cLon = ((coords[0][0] + coords[2][0]) / 2).toFixed(3);
+
+  const opBadges = operators.map(op => {
+    const color = OPERATOR_COLORS[op] || OPERATOR_COLORS.other;
+    return `<span class="card-op-badge"><span class="card-op-dot" style="background:${color}"></span>${op}</span>`;
+  }).join('');
+
+  const imageRows = images.map(img => {
+    const color = OPERATOR_COLORS[img.op] || OPERATOR_COLORS.other;
+    return `<div class="card-image-row">
+      <span class="card-image-op" style="background:${color}"></span>
+      <span class="card-image-id" title="${img.id}">${img.id}</span>
+      <span class="card-image-dt">${img.dt}</span>
+    </div>`;
+  }).join('');
+
+  document.getElementById('card-title').textContent = `${operators.length} providers · ${images.length} images`;
+  document.getElementById('card-body').innerHTML = `
+    <div class="card-operators">${opBadges}</div>
+    <div class="card-coords">${cLat}° N, ${cLon}° E</div>
+    <div class="card-section-label">Images</div>
+    ${imageRows}
+    <div class="card-enrich-placeholder">Enrichment from news sources coming soon</div>
+  `;
+  document.getElementById('overlap-card').classList.add('visible');
+  e.originalEvent.stopPropagation();
+});
+
+map.on('mouseenter', 'footprint-overlap-fill', () => {
+  map.getCanvas().style.cursor = 'pointer';
+});
+
+map.on('mouseleave', 'footprint-overlap-fill', () => {
+  map.getCanvas().style.cursor = '';
+});
+
+document.getElementById('card-close').addEventListener('click', () => {
+  document.getElementById('overlap-card').classList.remove('visible');
+});
+
 map.on('click', (e) => {
+  // Close overlap card on background click
+  const overlapHit = map.queryRenderedFeatures(e.point, { layers: ['footprint-overlap-fill'] });
+  if (overlapHit.length === 0) {
+    document.getElementById('overlap-card').classList.remove('visible');
+  }
   if (selectedSat === null) return;
   const features = map.queryRenderedFeatures(e.point, { layers: ['sat-dots'] });
   if (features.length > 0) return;
