@@ -38,16 +38,19 @@ jobs:
 
       - name: Sync STAC data (active hosts only)
         run: |
-          for host in oneatlas oneatlas-advanced 21at capellaspace planet vantor; do
-            echo "--- Syncing $host ---"
+          for host in oneatlas oneatlas-advanced 21at capellaspace vantor; do
+            echo "--- Syncing $host (7 days) ---"
             uv run scripts/sync_stac.py --days 7 --host "$host" || true
           done
+          # Planet SkySat: data only available after 30-day embargo, sync wider window
+          echo "--- Syncing planet (90 days) ---"
+          uv run scripts/sync_stac.py --days 90 --host planet || true
         env:
           UP42_USERNAME: ${{ secrets.UP42_USERNAME }}
           UP42_PASSWORD: ${{ secrets.UP42_PASSWORD }}
 
-      - name: Export GeoParquet (rolling 30-day window for deployment)
-        run: uv run scripts/export_parquet.py --days 30
+      - name: Export GeoParquet (rolling 90-day window for deployment)
+        run: uv run scripts/export_parquet.py --days 90
 
       - name: Package and upload data
         run: |
