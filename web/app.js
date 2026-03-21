@@ -509,7 +509,7 @@ async function initDateSlider() {
   buildSliderTicks();
   initRangeInteraction();
 
-  document.getElementById('date-slider').classList.add('active');
+  document.getElementById('date-slider-wrap').classList.add('active');
 
   // Default: last 3 days
   // Play button

@@ -218,16 +218,24 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 
 /* --- Date slider --- */
 
-#date-slider {
+#date-slider-wrap {
+    position: absolute;
     bottom: var(--edge-spacing);
     left: var(--edge-spacing);
     width: calc(50% - 32px);
-    padding: 12px 20px 8px;
     z-index: 10;
     display: none;
+    flex-direction: row;
+    gap: 0;
 }
 
-#date-slider.active { display: block; }
+#date-slider-wrap.active { display: flex; }
+
+#date-slider {
+    flex: 1;
+    padding: 12px 20px 8px;
+    position: relative;
+}
 
 #slider-histogram {
     position: relative;
@@ -345,20 +353,16 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 /* --- Play button --- */
 
 #play-btn {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 24px;
-    height: 24px;
-    background: none;
-    border: 1px solid var(--border-subtle);
+    width: 44px;
+    flex-shrink: 0;
+    border-left: none;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 12px;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: color 0.15s, border-color 0.15s;
+    transition: color 0.15s;
     padding: 0;
     line-height: 1;
 }
@@ -396,7 +400,7 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
         padding: 8px 10px;
     }
 
-    #date-slider {
+    #date-slider-wrap {
         bottom: 8px;
         left: 8px;
         width: calc(100% - 16px);
