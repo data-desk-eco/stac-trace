@@ -44,6 +44,13 @@ let dateCounts = [];     // [{date: 'YYYY-MM-DD', count: N}, ...]
 let rangeStart = -1;     // index into dateCounts
 let rangeEnd = -1;
 
+// Playback state
+let playing = false;
+let playbackTime = null;     // Date object for current playback time
+let playbackFeatures = [];   // all footprints for range, sorted by datetime
+let playbackSpeed = 3600;    // seconds of real time per animation frame (~1hr/frame)
+let playbackRafId = null;
+
 // ── TLE parsing ───────────────────────────────────────────────────
 function parseTLEs(text) {
   const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
@@ -268,13 +275,25 @@ map.on('load', async () => {
 
 // ── Animation loop ────────────────────────────────────────────────
 function tick() {
+  if (playing) return; // playback has its own loop
+
   const now = new Date();
   const nowMs = now.getTime();
-  const features = [];
+  propagateSatellites(now);
 
+  if (selectedSat && nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
+    lastTrailUpdate = nowMs;
+    updateTrails(now);
+  }
+
+  requestAnimationFrame(tick);
+}
+
+function propagateSatellites(time) {
+  const features = [];
   for (const sat of satellites) {
     if (disabledOperators.has(sat.operator)) continue;
-    const pos = propagate(sat.satrec, now);
+    const pos = propagate(sat.satrec, time);
     if (!pos) continue;
 
     const isSelected = selectedSat && sat.noradId === selectedSat.noradId;
@@ -295,16 +314,7 @@ function tick() {
       },
     });
   }
-
   map.getSource('satellites').setData({ type: 'FeatureCollection', features });
-
-  // Only update trails when a satellite is selected
-  if (selectedSat && nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
-    lastTrailUpdate = nowMs;
-    updateTrails(now);
-  }
-
-  requestAnimationFrame(tick);
 }
 
 function getOrbitalPeriodMin(satrec) {
@@ -360,6 +370,116 @@ function updateTrails(now) {
   map.getSource('selected-trail').setData({ type: 'FeatureCollection', features });
 }
 
+// ── Playback ─────────────────────────────────────────────────────
+async function startPlayback() {
+  if (playing) return;
+  if (rangeStart < 0 || rangeEnd < 0) return;
+
+  // Load all footprints for the range, sorted by time
+  const constellations = getEnabledConstellations();
+  if (constellations.length === 0) return;
+
+  const startDate = dateCounts[rangeStart].date;
+  const endDate = dateCounts[rangeEnd].date;
+  const inList = constellations.map(c => `'${c}'`).join(', ');
+
+  setLoadingStatus('Loading playback data...');
+  document.getElementById('loading').classList.remove('done');
+
+  const result = await duckdbConn.query(`
+    SELECT id, constellation,
+           STRFTIME(datetime, '%Y-%m-%dT%H:%M:%S') AS dt,
+           resolution, geojson
+    FROM '${parquetUrl()}'
+    WHERE STRFTIME(CAST(datetime AS DATE), '%Y-%m-%d') BETWEEN '${startDate}' AND '${endDate}'
+      AND constellation IN (${inList})
+    ORDER BY datetime
+  `);
+
+  playbackFeatures = [];
+  for (let i = 0; i < result.numRows; i++) {
+    const constellation = result.getChildAt(1).get(i);
+    const operator = CONSTELLATION_OPERATORS[constellation] || 'other';
+    const color = OPERATOR_COLORS[operator] || OPERATOR_COLORS.other;
+    const geojson = JSON.parse(result.getChildAt(4).get(i));
+    const dt = result.getChildAt(2).get(i);
+
+    playbackFeatures.push({
+      type: 'Feature',
+      geometry: geojson,
+      timestamp: new Date(dt + 'Z').getTime(),
+      properties: {
+        id: result.getChildAt(0).get(i),
+        constellation,
+        datetime: dt.replace('T', ' '),
+        resolution: result.getChildAt(3).get(i),
+        color,
+        outlineColor: color + '26',
+      },
+    });
+  }
+
+  dismissLoading();
+
+  playing = true;
+  playbackTime = new Date(startDate + 'T00:00:00Z');
+  document.getElementById('play-btn').textContent = '■';
+  document.getElementById('play-btn').classList.add('playing');
+
+  console.log(`Playback: ${playbackFeatures.length} footprints, ${startDate} to ${endDate}`);
+  playbackTick();
+}
+
+function stopPlayback() {
+  playing = false;
+  playbackTime = null;
+  playbackFeatures = [];
+  if (playbackRafId) cancelAnimationFrame(playbackRafId);
+  playbackRafId = null;
+
+  document.getElementById('play-btn').textContent = '▶';
+  document.getElementById('play-btn').classList.remove('playing');
+
+  // Return to live mode
+  loadFootprintsForRange();
+  tick();
+}
+
+function playbackTick() {
+  if (!playing) return;
+
+  const endTime = new Date(dateCounts[rangeEnd].date + 'T23:59:59Z').getTime();
+  const startTime = new Date(dateCounts[rangeStart].date + 'T00:00:00Z').getTime();
+
+  // Advance time
+  playbackTime = new Date(playbackTime.getTime() + playbackSpeed * 1000);
+
+  if (playbackTime.getTime() > endTime) {
+    stopPlayback();
+    return;
+  }
+
+  // Propagate satellites to playback time
+  propagateSatellites(playbackTime);
+
+  // Show footprints acquired up to playback time
+  const currentMs = playbackTime.getTime();
+  const visible = playbackFeatures.filter(f => f.timestamp <= currentMs);
+  map.getSource('collection').setData({ type: 'FeatureCollection', features: visible });
+
+  // Update slider label to show playback time
+  const progress = (currentMs - startTime) / (endTime - startTime);
+  const dateStr = playbackTime.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+  const container = document.getElementById('slider-labels');
+  container.innerHTML = `
+    <span>${dateCounts[rangeStart].date}</span>
+    <span class="current">${dateStr} · ${visible.length} images</span>
+    <span>${dateCounts[rangeEnd].date}</span>
+  `;
+
+  playbackRafId = requestAnimationFrame(playbackTick);
+}
+
 // ── Date slider ──────────────────────────────────────────────────
 async function initDateSlider() {
   if (!duckdbConn) return;
@@ -387,6 +507,15 @@ async function initDateSlider() {
   document.getElementById('date-slider').classList.add('active');
 
   // Default: last 3 days
+  // Play button
+  document.getElementById('play-btn').addEventListener('click', () => {
+    if (playing) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
+  });
+
   setRange(Math.max(0, dateCounts.length - 3), dateCounts.length - 1);
 }
 
