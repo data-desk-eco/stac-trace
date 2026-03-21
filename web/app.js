@@ -11,7 +11,8 @@ const CONSTELLATION_OPERATORS = {
   skysat: 'planet',
   'capella-geo': 'capella', 'capella-slc': 'capella', 'capella-sicd': 'capella', 'capella-gec': 'capella',
   'beijing-3a': '21at', 'beijing-3n': '21at',
-  'worldview-legion': 'maxar', worldview: 'maxar', geoeye: 'maxar',
+  'worldview-legion': 'maxar', 'worldview-1': 'maxar', 'worldview-2': 'maxar',
+  'worldview-3': 'maxar', 'geoeye-1': 'maxar',
   iceye: 'iceye',
 };
 
@@ -21,7 +22,7 @@ const CONSTELLATION_MAP = {
   spot: ['spot'],
   capella: ['capella-geo', 'capella-slc', 'capella-sicd', 'capella-gec'],
   skysat: ['skysat'],
-  worldview: ['worldview', 'worldview-legion', 'geoeye'],
+  worldview: ['worldview-1', 'worldview-2', 'worldview-3', 'worldview-legion', 'geoeye-1'],
   legion: ['worldview-legion'],
 };
 
