@@ -1,114 +1,57 @@
 # stac-trace
 
-Real-time Earth observation satellite constellation visualizer with a heatmap of recent high-resolution imagery collection activity. 'What's being watched?'
+Real-time EO satellite constellation visualizer with imagery collection heatmap and per-cluster intelligence analysis. Live at ltrg.co.uk/stac-trace
 
-Live at: `ltrg.co.uk/stac-trace`
+## Architecture
 
-## System Architecture
+Python scripts (uv run) fetch data into DuckDB, export to GeoParquet. Vanilla JS frontend with MapLibre GL globe, satellite.js propagation, duckdb-wasm for client-side parquet queries. GitHub Actions for daily sync + Pages deploy.
 
-- **Python scripts** (`scripts/`) for data fetching and encoding (run with `uv run`)
-- **DuckDB** (`data/stac.duckdb`) for persistent STAC data storage
-- **Vanilla JS frontend** (`web/`) with MapLibre GL globe + satellite.js
-- **GeoParquet** for footprint data delivery (queried client-side via duckdb-wasm)
-- **GitHub Actions** for daily data sync + Pages deployment
-- Uses UP42 [API docs](https://developer.up42.com/reference/overview) for STAC queries
-- UP42 credentials in `.env` (OAuth authentication)
+## Directory Layout
 
-## Directory Structure
-
-```
-scripts/
-  fetch_tles.py    # Fetch TLEs from CelesTrak for EO constellations
-  sync_stac.py     # Incremental STAC data sync from UP42
-  export_parquet.py # Export DuckDB data to GeoParquet
-queries/
-  analyze.sql      # DuckDB SQL for hotspot detection (legacy)
-web/
-  index.html       # Frontend entry point
-  app.js           # MapLibre globe, satellite propagation, duckdb-wasm
-  style.css        # Dark minimal UI, Inter font
-  data -> ../data  # Symlink for local dev
-data/
-  stac.duckdb      # Persistent database (gitignored)
-  tles.txt         # TLE data (generated)
-  satellites.json  # Satellite metadata (generated)
-  footprints.parquet # GeoParquet footprint data (generated)
-.github/workflows/
-  deploy.yml       # Deploy to Pages on push (downloads data from release)
-  sync.yml         # Daily: fetch data, upload to release, deploy Pages
-```
+- scripts/ — fetch_tles.py, sync_stac.py, sync_planet.py, export_parquet.py
+- web/ — index.html, app.js, style.css (the entire frontend)
+- data/ — stac.duckdb, tles.txt, satellites.json, footprints.parquet, cache/ (all generated, gitignored)
+- serve.py — local dev server with Claude CLI proxy for cluster analysis
+- .github/workflows/ — sync.yml (daily pipeline), deploy.yml (Pages deploy)
 
 ## Data Pipeline
 
-```bash
-# 1. Fetch satellite TLEs (no credentials needed)
-uv run scripts/fetch_tles.py
+Run in order:
+1. uv run scripts/fetch_tles.py — TLEs from CelesTrak (no auth)
+2. uv run scripts/sync_stac.py --days 30 — STAC metadata from UP42 (needs .env)
+3. uv run scripts/sync_planet.py — SkySat from Planet API (needs .env)
+4. uv run scripts/export_parquet.py — DuckDB to GeoParquet
 
-# 2. Sync STAC imagery metadata from UP42 (needs .env credentials)
-uv run scripts/sync_stac.py --days 30
+## Local Development
 
-# 3. Export footprints to GeoParquet
-uv run scripts/export_parquet.py
 ```
-
-All three steps must run in order. Steps 1 and 3 are fast. Step 2 hits the UP42 API and may take minutes depending on `--days`.
-
-### Local Development
-
-```bash
-# Create data symlink if missing
 cd web && ln -s ../data data && cd ..
-
-# Serve frontend
-python -m http.server -d web
-# Open http://localhost:8000
+uv run serve.py
 ```
 
-## Key Technical Details
+serve.py serves web/ on :8000 and proxies /api/claude to the claude CLI for cluster analysis. Analysis is localhost-only (disabled on Pages).
 
-### Authentication
-- OAuth endpoint: `https://auth.up42.com/realms/public/protocol/openid-connect/token`
-- Client ID: `up42-api`, grant type: `password`
-- Env vars: `UP42_USERNAME` and `UP42_PASSWORD` (set in `.env`)
+## Credentials (.env)
 
-### STAC Sync (`sync_stac.py`)
-- Auto-discovers available UP42 hosts (not just `oneatlas`)
-- CQL2 server-side filtering with fallback to client-side
-- 3 overlapping regions for global coverage, deduplicates results
-- Adaptive rate limiting from response headers
-- Time-window bisection when result sets exceed 10,000 items
-- CLI: `--days 7` (default), `--host oneatlas` (specific host), `--global-bbox` (try single query)
+- UP42_USERNAME, UP42_PASSWORD — UP42 STAC API (OAuth)
+- PLANET_API_KEY — Planet Data API (basic auth)
+- Claude CLI auth via Max subscription (no API key needed)
 
-### TLE Fetching (`fetch_tles.py`)
-- CelesTrak active + resource groups
-- Matches by name prefix: Maxar, Airbus, Planet, ICEYE, Capella, Satellogic, government
-- Outputs `tles.txt` (standard TLE format) + `satellites.json` (metadata with operator/color/resolution)
+## Frontend Details
 
-### GeoParquet (`export_parquet.py`)
-- Exports DuckDB items to `data/footprints.parquet`
-- Columns: id, constellation, datetime, resolution, geometry (WKB)
-- Sorted by constellation then datetime for efficient row-group filtering
-- ZSTD compression, 10K row groups
-- Queried client-side via duckdb-wasm with HTTP range requests
+- MapLibre GL JS globe with CARTO dark basemap + Esri satellite (on cluster select)
+- OpenFreeMap vector tiles for country labels/borders
+- satellite.js SGP4 propagation at idle frame rate
+- duckdb-wasm queries footprints.parquet via HTTP range requests
+- Multi-provider overlap detection: grid-based spatial index, union-find clustering
+- Cluster click: Overpass API for strategic POIs, Claude CLI streaming analysis
+- Date range slider with log-scale histogram, playback animation
 
-### Frontend (`web/app.js`)
-- MapLibre GL JS globe projection with CARTO dark raster basemap + OFM vector labels
-- Inter variable font, dark glass panels (raf-watch style)
-- satellite.js SGP4 propagation in requestAnimationFrame loop
-- Per-satellite orbital period trails (dashed, operator-coloured)
-- Click satellite: 3-orbit solid trail, others hidden, footprint polygons shown
-- duckdb-wasm queries GeoParquet for actual footprint polygons on satellite selection
+## Database Schema
 
-### Database Schema
+items: id TEXT PK, geometry JSON, properties JSON, bbox JSON, host TEXT, fetched_at TIMESTAMP
+sync_log: id INTEGER, host TEXT, region TEXT, start_date, end_date, items_added, synced_at
 
-```sql
-items (id TEXT PRIMARY KEY, geometry JSON, properties JSON, bbox JSON, host TEXT, fetched_at TIMESTAMP)
-sync_log (id INTEGER, host TEXT, region TEXT, start_date TIMESTAMP, end_date TIMESTAMP, items_added INTEGER, synced_at TIMESTAMP)
-```
+## Deployment
 
-### Deployment
-- **GitHub Pages** served from `web/` directory
-- **Data distribution**: `latest-data` release contains `data.zip` with TLEs, satellite metadata, GeoParquet, and DuckDB
-- **`deploy.yml`**: on push to main — downloads data from release, bundles into `web/data/`, deploys Pages
-- **`sync.yml`**: daily 06:00 UTC — runs full pipeline, uploads data.zip to release, deploys Pages
-- Live URL: `ltrg.co.uk/stac-trace`
+GitHub Pages from web/. Data distributed via latest-data release (data.zip). sync.yml runs daily at 06:00 UTC — full pipeline, upload, deploy. deploy.yml triggers on push to main.

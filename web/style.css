@@ -284,8 +284,8 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 
 .card-image-row {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: baseline;
+    gap: 6px;
     padding: 6px 0;
     font-size: var(--font-sm);
     color: var(--text-muted);
@@ -295,10 +295,12 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 .card-image-row:last-child { border-bottom: none; }
 
 .card-image-op {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
     flex-shrink: 0;
+    position: relative;
+    top: -1px;
 }
 
 .card-image-id {
@@ -320,7 +322,6 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 /* --- Enrichment / analysis --- */
 
 .enrich-loading {
-    padding: 10px 0;
     font-size: var(--font-xs);
     color: var(--text-hint);
 }
@@ -343,7 +344,6 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
 .enrich-status {
     font-size: var(--font-xs);
     color: var(--text-hint);
-    padding: 6px 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

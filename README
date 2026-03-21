@@ -1,0 +1,41 @@
+stac-trace
+
+Real-time Earth observation satellite constellation visualizer.
+Shows where high-resolution imagery is being collected and why.
+
+Live: ltrg.co.uk/stac-trace
+
+What it does:
+- Tracks 100+ EO satellites (Maxar, Airbus, Planet, Capella, ICEYE, 21AT)
+- Shows live orbital positions with operator-coloured trails
+- Displays 470K+ imagery footprints from the last 30 days
+- Detects multi-provider overlap clusters (areas imaged by 2+ operators)
+- Click a cluster: satellite basemap, Overpass POI query, Claude analysis
+
+Data sources:
+- UP42 STAC API (Airbus, Maxar, 21AT, Capella imagery metadata)
+- Planet Data API (SkySat direct)
+- CelesTrak (satellite TLEs)
+- Overpass API (OpenStreetMap strategic features)
+- Claude CLI (streaming intelligence analysis, localhost only)
+
+Stack:
+- Python (data pipeline, run with uv)
+- DuckDB + GeoParquet (storage and delivery)
+- MapLibre GL JS (globe visualisation)
+- satellite.js (SGP4 orbital propagation)
+- duckdb-wasm (client-side parquet queries)
+- Vanilla JS/CSS (no build step)
+
+Run locally:
+  uv run scripts/fetch_tles.py
+  uv run scripts/sync_stac.py --days 30
+  uv run scripts/sync_planet.py
+  uv run scripts/export_parquet.py
+  cd web && ln -s ../data data && cd ..
+  uv run serve.py
+
+Requires .env with UP42_USERNAME, UP42_PASSWORD, PLANET_API_KEY.
+Claude analysis requires an authenticated claude CLI (Max subscription).
+
+Daily sync via GitHub Actions. Deployed to GitHub Pages.
