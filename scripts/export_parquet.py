@@ -5,17 +5,24 @@
 """Export DuckDB STAC items to GeoParquet for frontend querying."""
 
 import argparse
+import os
 import duckdb
+
 
 def main():
     parser = argparse.ArgumentParser(description="Export STAC items to GeoParquet")
     parser.add_argument("--db", default="data/stac.duckdb", help="Database path")
     parser.add_argument("--output", default="data/footprints.parquet", help="Output path")
+    parser.add_argument("--days", type=int, default=None, help="Rolling window in days (default: all data)")
     args = parser.parse_args()
 
     db = duckdb.connect(args.db, read_only=True)
 
-    count = db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    where = ""
+    if args.days:
+        where = f"WHERE CAST(properties->>'datetime' AS TIMESTAMP) >= current_timestamp - INTERVAL '{args.days} days'"
+
+    count = db.execute(f"SELECT COUNT(*) FROM items {where}").fetchone()[0]
     print(f"Exporting {count:,} items to {args.output}...")
 
     db.execute(f"""
@@ -27,24 +34,23 @@ def main():
                 CAST(properties->>'resolution' AS DOUBLE) AS resolution,
                 geometry AS geojson
             FROM items
+            {where}
             ORDER BY constellation, datetime
         ) TO '{args.output}'
         WITH (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE 10000)
     """)
 
-    # Verify
     result = db.execute(f"""
-        SELECT COUNT(*) as n,
-               COUNT(DISTINCT constellation) as constellations
+        SELECT COUNT(*) as n, COUNT(DISTINCT constellation) as constellations
         FROM '{args.output}'
     """).fetchone()
     print(f"Written: {result[0]:,} rows, {result[1]} constellations")
 
-    import os
     size_mb = os.path.getsize(args.output) / 1024 / 1024
     print(f"File size: {size_mb:.1f} MB")
 
     db.close()
+
 
 if __name__ == "__main__":
     main()
