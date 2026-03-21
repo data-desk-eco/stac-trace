@@ -552,7 +552,7 @@ function buildHistogram() {
     const bar = document.createElement('div');
     bar.className = 'histo-bar';
     bar.style.left = `${idxToPercent(i)}%`;
-    bar.style.height = `${Math.max(1, (d.count / maxCount) * 24)}px`;
+    bar.style.height = `${Math.max(1, (Math.log(d.count + 1) / Math.log(maxCount + 1)) * 24)}px`;
     container.appendChild(bar);
   });
 }
