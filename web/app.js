@@ -136,18 +136,31 @@ map.on('style.load', () => {
   map.setProjection({ type: 'globe' });
 });
 
+// ── Loading progress ─────────────────────────────────────────────
+function setLoadingStatus(msg) {
+  const el = document.getElementById('loading-status');
+  if (el) el.textContent = msg;
+}
+
+function dismissLoading() {
+  const el = document.getElementById('loading');
+  if (el) el.classList.add('done');
+}
+
 // ── DuckDB-WASM setup ────────────────────────────────────────────
 async function initDuckDB() {
+  setLoadingStatus('Loading DuckDB...');
   const DUCKDB_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/';
   const duckdb = await import(DUCKDB_CDN + 'duckdb-browser.mjs');
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: DUCKDB_CDN + 'duckdb-mvp.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-mvp.worker.js' },
     eh: { mainModule: DUCKDB_CDN + 'duckdb-eh.wasm', mainWorker: DUCKDB_CDN + 'duckdb-browser-eh.worker.js' },
   });
+  setLoadingStatus('Initialising query engine...');
   const workerScript = await fetch(bundle.mainWorker).then(r => r.text());
   const workerBlob = new Blob([workerScript], { type: 'text/javascript' });
   const worker = new Worker(URL.createObjectURL(workerBlob));
-  const logger = new duckdb.ConsoleLogger();
+  const logger = new duckdb.VoidLogger();
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule);
   return await db.connect();
@@ -233,6 +246,7 @@ map.on('load', async () => {
   });
 
   // Load data in parallel
+  setLoadingStatus('Loading satellite data...');
   const [tleText, metaJson, conn] = await Promise.all([
     fetch(`${DATA_BASE}/tles.txt`).then(r => r.ok ? r.text() : ''),
     fetch(`${DATA_BASE}/satellites.json`).then(r => r.ok ? r.json() : {}),
@@ -263,9 +277,11 @@ map.on('load', async () => {
   buildLegend();
 
   // Load date histogram and init slider
+  setLoadingStatus('Loading imagery dates...');
   await initDateSlider();
 
-  // Start animation
+  // Ready
+  dismissLoading();
   tick();
 });
 
