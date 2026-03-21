@@ -1285,7 +1285,7 @@ Imaged by: ${operators.join(', ')} (${imageCount} images)
 OSM features in area:
 ${JSON.stringify(osmFeatures)}
 
-You have access to web search. Search for recent news and context about this specific location and any key facilities listed above. Do 2-4 targeted searches.
+You have access to web search. Do 2-4 targeted searches. Search in BOTH English AND the local language of the location (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: government statements, military communiques, local news agencies, official incident reports. Avoid aggregators and opinion pieces.
 
 Then write a pithy, confident assessment of WHAT is being watched and WHY these satellite providers are tasking imagery here. Write for an analyst who knows the domain — no throat-clearing, no caveats, no "it's worth noting".
 
