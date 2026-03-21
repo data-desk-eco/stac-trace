@@ -25,9 +25,7 @@ const CONSTELLATION_MAP = {
 const DATA_BASE = 'data';
 
 // ── Trail config ──────────────────────────────────────────────────
-const TRAIL_POINTS = 180;
 const TRAIL_UPDATE_MS = 5000;
-const SELECTED_ORBITS = 3;
 const TRAIL_BANDS = [
   { from: 0,    to: 0.25, opacity: 0.5 },
   { from: 0.25, to: 0.5,  opacity: 0.3 },
@@ -184,11 +182,6 @@ map.on('load', async () => {
     data: { type: 'FeatureCollection', features: [] },
   });
 
-  map.addSource('trails', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-  });
-
   map.addSource('selected-trail', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -206,20 +199,7 @@ map.on('load', async () => {
     },
   });
 
-  // Default trails (dashed)
-  map.addLayer({
-    id: 'trails',
-    type: 'line',
-    source: 'trails',
-    paint: {
-      'line-color': ['get', 'color'],
-      'line-width': ['get', 'width'],
-      'line-opacity': ['get', 'opacity'],
-      'line-dasharray': [1, 2],
-    },
-  });
-
-  // Selected satellite trail (solid)
+  // Satellite trail (shown on selection)
   map.addLayer({
     id: 'selected-trail',
     type: 'line',
@@ -317,7 +297,8 @@ function tick() {
 
   map.getSource('satellites').setData({ type: 'FeatureCollection', features });
 
-  if (nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
+  // Only update trails when a satellite is selected
+  if (selectedSat && nowMs - lastTrailUpdate > TRAIL_UPDATE_MS) {
     lastTrailUpdate = nowMs;
     updateTrails(now);
   }
@@ -330,51 +311,49 @@ function getOrbitalPeriodMin(satrec) {
 }
 
 function updateTrails(now) {
-  const defaultFeatures = [];
-  const selectedFeatures = [];
+  if (!selectedSat) return;
+  const sat = selectedSat;
 
-  for (const sat of satellites) {
-    if (disabledOperators.has(sat.operator)) continue;
+  // Trail covers from the earliest date in the slider to now
+  const startDate = dateCounts.length > 0
+    ? new Date(dateCounts[0].date + 'T00:00:00Z')
+    : new Date(now.getTime() - 7 * 86400000);
+  const totalSec = (now.getTime() - startDate.getTime()) / 1000;
+  const periodMin = getOrbitalPeriodMin(sat.satrec);
+  const periodSec = periodMin * 60;
+  // Sample one point per ~30s of orbital time for smooth lines
+  const stepSec = 30;
+  const totalPoints = Math.min(Math.ceil(totalSec / stepSec), 50000);
 
-    const isSelected = selectedSat && sat.noradId === selectedSat.noradId;
-    if (selectedSat && !isSelected) continue;
-    const orbits = isSelected ? SELECTED_ORBITS : 1;
-    const totalPoints = TRAIL_POINTS * orbits;
-    const periodMin = getOrbitalPeriodMin(sat.satrec);
-    const stepSec = (periodMin * 60) / TRAIL_POINTS;
-    const lineWidth = isSelected ? 4 : 2;
+  const positions = [];
+  for (let i = 0; i <= totalPoints; i++) {
+    const secAgo = i * stepSec;
+    const t = new Date(now.getTime() - secAgo * 1000);
+    const pos = propagate(sat.satrec, t);
+    if (pos) positions.push([pos.lon, pos.lat, secAgo / totalSec]);
+  }
 
-    const positions = [];
-    for (let i = 0; i <= totalPoints; i++) {
-      const secAgo = i * stepSec;
-      const t = new Date(now.getTime() - secAgo * 1000);
-      const pos = propagate(sat.satrec, t);
-      if (pos) positions.push([pos.lon, pos.lat, i / totalPoints]);
-    }
+  if (positions.length < 2) return;
 
-    if (positions.length < 2) continue;
+  // Fade trail: recent orbits brighter, older ones fainter
+  const features = [];
+  for (const band of TRAIL_BANDS) {
+    const bandPts = positions.filter(p => p[2] >= band.from && p[2] <= band.to);
+    if (bandPts.length < 2) continue;
 
-    const target = isSelected ? selectedFeatures : defaultFeatures;
+    const coords = bandPts.map(p => [p[0], p[1]]);
+    const segments = splitAtAntimeridian(coords);
 
-    for (const band of TRAIL_BANDS) {
-      const bandPts = positions.filter(p => p[2] >= band.from && p[2] <= band.to);
-      if (bandPts.length < 2) continue;
-
-      const coords = bandPts.map(p => [p[0], p[1]]);
-      const segments = splitAtAntimeridian(coords);
-
-      for (const seg of segments) {
-        target.push({
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: seg },
-          properties: { color: sat.color, opacity: band.opacity, width: lineWidth },
-        });
-      }
+    for (const seg of segments) {
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: seg },
+        properties: { color: sat.color, opacity: band.opacity, width: 2 },
+      });
     }
   }
 
-  map.getSource('trails').setData({ type: 'FeatureCollection', features: defaultFeatures });
-  map.getSource('selected-trail').setData({ type: 'FeatureCollection', features: selectedFeatures });
+  map.getSource('selected-trail').setData({ type: 'FeatureCollection', features });
 }
 
 // ── Date slider ──────────────────────────────────────────────────
@@ -762,19 +741,22 @@ function selectSatellite(sat) {
     loadFootprintsForRange();
   }
 
+  // Show trail immediately
   lastTrailUpdate = 0;
+  updateTrails(new Date());
 }
 
 function deselectSatellite() {
   selectedSat = null;
   document.getElementById('sat-info').innerHTML = '';
 
+  // Clear trail
+  map.getSource('selected-trail').setData({ type: 'FeatureCollection', features: [] });
+
   // Re-query footprints for all constellations
   if (rangeStart >= 0) {
     loadFootprintsForRange();
   }
-
-  lastTrailUpdate = 0;
 }
 
 map.on('click', 'sat-dots', (e) => {
