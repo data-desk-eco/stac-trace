@@ -51,3 +51,6 @@ web/data
 data/*.stac1
 data/tles.txt
 data/satellites.json
+
+# Playwright MCP artifacts
+.playwright-mcp/

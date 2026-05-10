@@ -90,6 +90,18 @@ def main():
     size_mb = os.path.getsize(args.output) / 1024 / 1024
     print(f"File size: {size_mb:.1f} MB")
 
+    # Export analysis cache if it exists
+    cache_output = os.path.join(os.path.dirname(args.output), "cache.parquet")
+    db_rw = duckdb.connect(args.db)
+    try:
+        cache_count = db_rw.execute("SELECT count(*) FROM analysis_cache").fetchone()[0]
+        if cache_count > 0:
+            db_rw.execute(f"COPY analysis_cache TO '{cache_output}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+            print(f"Cache: {cache_count} cached analyses exported")
+    except duckdb.CatalogException:
+        print("Cache: no analysis_cache table found, skipping")
+    db_rw.close()
+
     db.close()
     db2.close()
 

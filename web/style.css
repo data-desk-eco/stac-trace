@@ -368,6 +368,90 @@ html, body { width: 100%; height: 100%; font-family: 'Inter', -apple-system, Bli
     color: var(--text-secondary);
 }
 
+/* --- API key form (inline in cluster card) --- */
+
+.enrich-keyform {
+    padding: 4px 0 2px;
+}
+
+.enrich-keyform-msg {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin: 0 0 8px;
+}
+
+.enrich-keyform-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.enrich-key-input {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-light);
+    color: var(--text-primary);
+    padding: 5px 8px;
+    font: inherit;
+    font-size: var(--font-xs);
+    font-family: 'SF Mono', 'Menlo', monospace;
+    border-radius: 2px;
+    outline: none;
+}
+
+.enrich-key-input:focus {
+    border-color: var(--text-muted);
+}
+
+.enrich-key-save {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border-light);
+    color: var(--text-secondary);
+    padding: 5px 10px;
+    font: inherit;
+    font-size: var(--font-xs);
+    cursor: pointer;
+    border-radius: 2px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.enrich-key-save:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: var(--text-primary);
+}
+
+.enrich-keyform-link {
+    font-size: var(--font-xs);
+    color: var(--text-faint);
+    text-decoration: none;
+}
+
+.enrich-keyform-link:hover {
+    color: var(--text-muted);
+}
+
+/* --- Citations under analysis paragraph --- */
+
+.enrich-cites {
+    margin-top: 8px;
+    font-size: var(--font-xs);
+    color: var(--text-faint);
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.enrich-cite {
+    color: var(--text-faint);
+    text-decoration: none;
+}
+
+.enrich-cite:hover {
+    color: var(--text-secondary);
+    text-decoration: underline;
+}
+
 /* --- Tooltip --- */
 
 #tooltip {

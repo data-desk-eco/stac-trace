@@ -57,7 +57,7 @@ jobs:
       - name: Package and upload data
         run: |
           cd data
-          zip -r ../data.zip tles.txt satellites.json footprints.parquet stac.duckdb
+          zip -r ../data.zip tles.txt satellites.json footprints.parquet cache.parquet stac.duckdb
           cd ..
           gh release create latest-data --title "Data" --notes "Auto-updated data files" 2>/dev/null || true
           gh release upload latest-data data.zip --clobber
@@ -69,6 +69,7 @@ jobs:
         run: |
           mkdir -p web/data
           cp data/tles.txt data/satellites.json data/footprints.parquet web/data/
+          cp data/cache.parquet web/data/ 2>/dev/null || true
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

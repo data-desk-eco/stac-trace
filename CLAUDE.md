@@ -11,7 +11,7 @@ Python scripts (uv run) fetch data into DuckDB, export to GeoParquet. Vanilla JS
 - scripts/ — fetch_tles.py, sync_stac.py, sync_planet.py, export_parquet.py
 - web/ — index.html, app.js, style.css (the entire frontend)
 - data/ — stac.duckdb, tles.txt, satellites.json, footprints.parquet, cache/ (all generated, gitignored)
-- serve.py — local dev server with Claude CLI proxy for cluster analysis
+- serve.py — local dev server (static files only)
 - .github/workflows/ — sync.yml (daily pipeline), deploy.yml (Pages deploy)
 
 ## Data Pipeline
@@ -29,13 +29,13 @@ cd web && ln -s ../data data && cd ..
 uv run serve.py
 ```
 
-serve.py serves web/ on :8000 and proxies /api/claude to the claude CLI for cluster analysis. Analysis is localhost-only (disabled on Pages).
+serve.py just serves web/ on :8000. Cluster analysis runs entirely in the browser via OpenRouter (Qwen3-VL `:online`); the user pastes their OpenRouter API key into the cluster card, it's stored in localStorage, and requests go direct from the browser to openrouter.ai. Works identically locally and on the deployed Pages site.
 
 ## Credentials (.env)
 
 - UP42_USERNAME, UP42_PASSWORD — UP42 STAC API (OAuth)
 - PLANET_API_KEY — Planet Data API (basic auth)
-- Claude CLI auth via Max subscription (no API key needed)
+- Cluster analysis: end-user supplies their own OpenRouter key in the UI (no server-side secret)
 
 ## Frontend Details
 
@@ -44,7 +44,7 @@ serve.py serves web/ on :8000 and proxies /api/claude to the claude CLI for clus
 - satellite.js SGP4 propagation at idle frame rate
 - duckdb-wasm queries footprints.parquet via HTTP range requests
 - Multi-provider overlap detection: grid-based spatial index, union-find clustering
-- Cluster click: Overpass API for strategic POIs, Claude CLI streaming analysis
+- Cluster click: Overpass API for strategic POIs, Esri World Imagery snapshot stitched from raster tiles, Qwen3-VL via OpenRouter (`:online` plugin = Exa web search) for analysis with citations. Per-user response cache in localStorage; legacy Claude responses still read from data/cache.parquet via duckdb-wasm.
 - Date range slider with log-scale histogram, playback animation
 
 ## Database Schema

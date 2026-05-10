@@ -27,7 +27,12 @@ const CONSTELLATION_MAP = {
 };
 
 const DATA_BASE = 'data';
-const HAS_ANALYSIS = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'qwen/qwen3-vl-235b-a22b-instruct:online';
+const OR_KEY_STORAGE = 'openrouter_api_key';
+const OR_CACHE_PREFIX = 'or_cache_';
+const getOpenRouterKey = () => localStorage.getItem(OR_KEY_STORAGE) || '';
+const setOpenRouterKey = (k) => k ? localStorage.setItem(OR_KEY_STORAGE, k) : localStorage.removeItem(OR_KEY_STORAGE);
 
 // ── Trail config ──────────────────────────────────────────────────
 const TRAIL_UPDATE_MS = 5000;
@@ -184,9 +189,12 @@ async function initDuckDB() {
   return await db.connect();
 }
 
-// ── Parquet URL ──────────────────────────────────────────────────
+// ── Parquet URLs ─────────────────────────────────────────────────
 function parquetUrl() {
-  return `${location.origin}${location.pathname}data/footprints.parquet`;
+  return `${location.origin}${location.pathname}data/footprints.parquet?v=${Date.now()}`;
+}
+function cacheParquetUrl() {
+  return `${location.origin}${location.pathname}data/cache.parquet?v=${Date.now()}`;
 }
 
 // ── Data loading ──────────────────────────────────────────────────
@@ -390,6 +398,12 @@ map.on('load', async () => {
     duckdbConn = conn;
     console.log('DuckDB ready');
     await initDateSlider();
+    // Try loading analysis cache parquet (may not exist on fresh deploys)
+    try {
+      await conn.query(`CREATE TABLE IF NOT EXISTS analysis_cache AS SELECT * FROM read_parquet('${cacheParquetUrl()}')`);
+      const r = await conn.query('SELECT count(*) AS n FROM analysis_cache');
+      console.log(`Analysis cache: ${r.toArray()[0].n} entries`);
+    } catch { console.log('No analysis cache parquet found'); }
   }).catch(err => {
     console.error('DuckDB init failed:', err);
   });
@@ -1279,20 +1293,119 @@ async function queryOverpass(south, west, north, east) {
 }
 
 function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon) {
-  return `You are an OSINT research assistant for a civilian open-source intelligence project analysing publicly available commercial satellite imagery catalogues. This is an academic and journalistic tool — similar to work published by Bellingcat, Planet Labs Stories, and the Middlebury Institute. All data used is from public STAC catalogues and OpenStreetMap. You are not providing targeting data or operational military intelligence.
+  return `You are an OSINT research assistant for a civilian open-source intelligence project analysing publicly available commercial satellite imagery catalogues. This is an academic and journalistic tool — similar to work published by Bellingcat, Planet Labs Stories, and the Middlebury Institute. All data used is from public STAC catalogues, OpenStreetMap, and Esri World Imagery. You are not providing targeting data or operational military intelligence.
 
 Location: ${lat}°N, ${lon}°E
 Imaged by: ${operators.join(', ')} (${imageCount} images in catalogue)
 
+The attached image is a high-resolution Esri World Imagery snapshot (~1 km wide) centred on the cluster. Use it to ground-truth what is physically present.
+
 OSM features in area:
 ${JSON.stringify(osmFeatures)}
 
-Do 2-4 web searches for recent news about this location. Search in BOTH English AND the local language (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
+Search the web for recent news about this location. Search in BOTH English AND the local language (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
 
-Write a single short paragraph: where this is, what key facilities are present, and what recent events or strategic context likely explain the commercial satellite observation activity. Emphasise what has happened HERE in the last few weeks, not just background context. Plain text only, no markdown, no lists (including lists of sources), under 100 words.`;
+Write a single short paragraph: where this is, what key facilities are visible in the imagery, and what recent events or strategic context likely explain the commercial satellite observation activity. Emphasise what has happened HERE in the last few weeks, not just background context. Plain text only, no markdown, no lists (including lists of sources), under 100 words.`;
 }
 
-async function streamLLM(container, osmItems, prompt) {
+// ── Esri World Imagery snapshot ──────────────────────────────────
+// Stitches a 2x2 grid of Esri World Imagery raster tiles centred on the
+// cluster, returns a base64 JPEG data URL suitable for OpenRouter image_url.
+function lonLatToTile(lon, lat, z) {
+  const n = 2 ** z;
+  const x = (lon + 180) / 360 * n;
+  const latRad = lat * Math.PI / 180;
+  const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n;
+  return { x, y };
+}
+
+async function captureClusterImagery(lon, lat, zoom = 16) {
+  // Cluster centroids near the antimeridian arrive unwrapped (e.g. 219.8° = -140.2°).
+  // Normalise to [-180, 180] before computing tile coordinates.
+  lon = ((lon + 180) % 360 + 360) % 360 - 180;
+  const t = lonLatToTile(lon, lat, zoom);
+  const baseX = Math.floor(t.x - 0.5);
+  const baseY = Math.floor(t.y - 0.5);
+  const maxTile = 2 ** zoom;
+
+  const TILE = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = TILE * 2;
+  canvas.height = TILE * 2;
+  const ctx = canvas.getContext('2d');
+
+  const loads = [];
+  for (let dx = 0; dx < 2; dx++) {
+    for (let dy = 0; dy < 2; dy++) {
+      const x = ((baseX + dx) % maxTile + maxTile) % maxTile;
+      const y = Math.max(0, Math.min(maxTile - 1, baseY + dy));
+      const url = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${y}/${x}`;
+      loads.push(new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => { ctx.drawImage(img, dx * TILE, dy * TILE); resolve(); };
+        img.onerror = () => reject(new Error(`tile ${zoom}/${x}/${y} failed`));
+        img.src = url;
+      }));
+    }
+  }
+  await Promise.all(loads);
+  return canvas.toDataURL('image/jpeg', 0.85);
+}
+
+// ── Per-cluster cache (localStorage) ─────────────────────────────
+function clusterCacheKey(lat, lon, operators, imageCount) {
+  return `${OR_CACHE_PREFIX}${lat}_${lon}_${operators.slice().sort().join(',')}_${imageCount}`;
+}
+function readClusterCache(lat, lon, operators, imageCount) {
+  try { return localStorage.getItem(clusterCacheKey(lat, lon, operators, imageCount)) || null; }
+  catch { return null; }
+}
+function writeClusterCache(lat, lon, operators, imageCount, text) {
+  try { localStorage.setItem(clusterCacheKey(lat, lon, operators, imageCount), text); }
+  catch { /* quota — ignore */ }
+}
+
+// ── API key form ─────────────────────────────────────────────────
+function renderKeyForm(container, onSaved) {
+  container.innerHTML = `
+    <div class="enrich-keyform">
+      <p class="enrich-keyform-msg">Analysis is powered by Qwen3-VL via OpenRouter. Add your API key to enable it — stored in your browser only, sent direct to openrouter.ai.</p>
+      <div class="enrich-keyform-row">
+        <input type="password" class="enrich-key-input" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false">
+        <button class="enrich-key-save">Save</button>
+      </div>
+      <a class="enrich-keyform-link" href="https://openrouter.ai/keys" target="_blank" rel="noopener">Get a key →</a>
+    </div>`;
+  const input = container.querySelector('.enrich-key-input');
+  const save = container.querySelector('.enrich-key-save');
+  const submit = () => {
+    const v = input.value.trim();
+    if (!v) return;
+    setOpenRouterKey(v);
+    onSaved();
+  };
+  save.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  input.focus();
+}
+
+async function promptHash(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+async function getCachedAnalysis(prompt) {
+  if (!duckdbConn) return null;
+  try {
+    const h = await promptHash(prompt);
+    const r = await duckdbConn.query(`SELECT response FROM analysis_cache WHERE prompt_hash = '${h}'`);
+    const rows = r.toArray();
+    return rows.length ? rows[0].response : null;
+  } catch { return null; }
+}
+
+async function streamLLM(container, osmItems, prompt, lat, lon, operators, imageCount) {
   // Place POI markers on map
   const mapFeatures = osmItems
     .filter(it => it.lat != null && it.lon != null && it.name)
@@ -1305,24 +1418,65 @@ async function streamLLM(container, osmItems, prompt) {
     map.getSource('pois').setData({ type: 'FeatureCollection', features: mapFeatures });
   }
 
-  container.innerHTML = '<div class="enrich-status">Connecting...</div><div class="enrich-report" style="display:none"><p class="enrich-para"></p></div>';
+  // Per-cluster localStorage cache (instant repeat hits for the same user)
+  const localCached = readClusterCache(lat, lon, operators, imageCount);
+  if (localCached) {
+    container.innerHTML = `<div class="enrich-report"><p class="enrich-para">${localCached.replace(/</g, '&lt;')}</p></div>`;
+    return;
+  }
+  // Legacy shared cache (cache.parquet) — Claude responses keyed by exact prompt
+  const sharedCached = await getCachedAnalysis(prompt);
+  if (sharedCached) {
+    container.innerHTML = `<div class="enrich-report"><p class="enrich-para">${sharedCached.replace(/</g, '&lt;')}</p></div>`;
+    return;
+  }
+
+  container.innerHTML = '<div class="enrich-status">Capturing imagery…</div><div class="enrich-report" style="display:none"><p class="enrich-para"></p></div>';
   const statusEl = container.querySelector('.enrich-status');
   const reportEl = container.querySelector('.enrich-report');
   const paraEl = container.querySelector('.enrich-para');
 
+  let imageDataUrl = null;
   try {
-    const resp = await fetch('/api/claude', {
+    imageDataUrl = await captureClusterImagery(parseFloat(lon), parseFloat(lat));
+  } catch (err) {
+    console.warn('Imagery capture failed, proceeding text-only:', err);
+  }
+
+  statusEl.textContent = 'Querying Qwen3-VL via OpenRouter…';
+
+  const userContent = [{ type: 'text', text: prompt }];
+  if (imageDataUrl) {
+    userContent.push({ type: 'image_url', image_url: { url: imageDataUrl } });
+  }
+
+  try {
+    const resp = await fetch(OPENROUTER_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] }),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${getOpenRouterKey()}`,
+        'HTTP-Referer': location.origin + location.pathname,
+        'X-Title': 'STAC TRACE',
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_MODEL,
+        stream: true,
+        temperature: 0.3,
+        max_tokens: 600,
+        messages: [{ role: 'user', content: userContent }],
+      }),
     });
-    if (!resp.ok) throw new Error(`API ${resp.status}`);
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      throw new Error(`OpenRouter ${resp.status}: ${errBody.slice(0, 200)}`);
+    }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let text = '';
-    let searchCount = 0;
+    const citations = [];
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1333,58 +1487,56 @@ async function streamLLM(container, osmItems, prompt) {
       buffer = lines.pop();
 
       for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const payload = line.slice(6);
-        if (payload === '[DONE]') continue;
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
 
         let event;
         try { event = JSON.parse(payload); } catch { continue; }
 
-        if (event.type === 'assistant' && event.message?.content) {
-          for (const block of event.message.content) {
-            if (block.type === 'text' && block.text) {
-              text += block.text;
-              paraEl.textContent = text;
-              reportEl.style.display = '';
-              statusEl.style.display = 'none';
-            }
-            if (block.type === 'tool_use' && block.name === 'WebSearch') {
-              searchCount++;
-              const query = block.input?.query || '';
-              statusEl.textContent = `Searching: ${query}`;
-              statusEl.style.display = '';
-            }
-            if (block.type === 'tool_use' && block.name === 'WebFetch') {
-              statusEl.textContent = `Reading: ${block.input?.url || ''}`;
-              statusEl.style.display = '';
-            }
-          }
+        const choice = event.choices?.[0];
+        if (!choice) continue;
+
+        const delta = choice.delta || choice.message || {};
+        if (delta.content) {
+          text += delta.content;
+          paraEl.textContent = text;
+          reportEl.style.display = '';
+          statusEl.style.display = 'none';
+        }
+        // OpenRouter :online surfaces citations in delta.annotations
+        for (const ann of (delta.annotations || [])) {
+          const url = ann.url_citation?.url || ann.url;
+          if (url && !citations.includes(url)) citations.push(url);
         }
       }
     }
 
     statusEl.style.display = 'none';
-    if (!text) {
+    if (!text.trim()) {
       reportEl.style.display = 'none';
       container.innerHTML = '<span class="enrich-empty">Analysis unavailable</span>';
+      return;
     }
 
-  } catch (err) {
-    console.warn('LLM stream failed:', err);
-    statusEl.style.display = 'none';
-    if (osmItems.length > 0) {
-      const named = osmItems.filter(it => it.name).slice(0, 12);
-      container.innerHTML = named.map(it =>
-        `<div class="poi-clickable" data-lat="${it.lat}" data-lon="${it.lon}">${it.name}</div>`
-      ).join('');
-      container.querySelectorAll('.poi-clickable').forEach(row => {
-        row.addEventListener('click', () => {
-          map.flyTo({ center: [parseFloat(row.dataset.lon), parseFloat(row.dataset.lat)], zoom: 14, duration: 1500 });
-        });
-      });
-    } else {
-      container.innerHTML = '<span class="enrich-empty">Analysis unavailable</span>';
+    if (citations.length) {
+      const sourcesHtml = citations.slice(0, 8).map(u => {
+        const host = (() => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } })();
+        return `<a class="enrich-cite" href="${u}" target="_blank" rel="noopener">${host}</a>`;
+      }).join(' · ');
+      const citesEl = document.createElement('div');
+      citesEl.className = 'enrich-cites';
+      citesEl.innerHTML = sourcesHtml;
+      reportEl.appendChild(citesEl);
     }
+
+    writeClusterCache(lat, lon, operators, imageCount, text);
+
+  } catch (err) {
+    console.warn('OpenRouter stream failed:', err);
+    statusEl.style.display = 'none';
+    container.innerHTML = `<span class="enrich-empty">Analysis failed: ${String(err.message || err).replace(/</g, '&lt;')}</span>`;
   }
 }
 
@@ -1416,11 +1568,10 @@ function setSatelliteBasemap(on) {
   map.setLayoutProperty('satellite-basemap', 'visibility', on ? 'visible' : 'none');
 }
 
-map.on('click', 'footprint-overlap-fill', (e) => {
+function selectCluster(f) {
   const id = ++enrichRequestId;
-  const f = e.features[0];
-  const operators = JSON.parse(f.properties.operators);
-  const images = JSON.parse(f.properties.images);
+  const operators = typeof f.properties.operators === 'string' ? JSON.parse(f.properties.operators) : f.properties.operators;
+  const images = typeof f.properties.images === 'string' ? JSON.parse(f.properties.images) : f.properties.images;
   const coords = f.geometry.coordinates[0];
   const cLat = ((coords[0][1] + coords[2][1]) / 2).toFixed(3);
   const cLon = ((coords[0][0] + coords[2][0]) / 2).toFixed(3);
@@ -1445,9 +1596,7 @@ map.on('click', 'footprint-overlap-fill', (e) => {
   const west = Math.min(coords[0][0], coords[2][0]) - pad;
   const east = Math.max(coords[0][0], coords[2][0]) + pad;
 
-  const analysisHtml = HAS_ANALYSIS
-    ? `<div class="card-section-label">Analysis</div><div id="enrich-results" class="enrich-loading">Querying area...</div>`
-    : '';
+  const analysisHtml = `<div class="card-section-label">Analysis</div><div id="enrich-results" class="enrich-loading">Querying area...</div>`;
 
   document.getElementById('card-title').textContent = `${operators.length} providers · ${images.length} images`;
   document.getElementById('card-body').innerHTML = `
@@ -1461,11 +1610,11 @@ map.on('click', 'footprint-overlap-fill', (e) => {
   setSatelliteBasemap(true);
   highlightCluster(f);
 
-  if (HAS_ANALYSIS) {
-    // Pipeline: Overpass → summarise → stream LLM
-    (async () => {
-      const el = () => id === enrichRequestId ? document.getElementById('enrich-results') : null;
+  // Pipeline: Overpass → summarise → (key prompt or) stream LLM
+  (async () => {
+    const el = () => id === enrichRequestId ? document.getElementById('enrich-results') : null;
 
+    const runAnalysis = async () => {
       const overpassData = await queryOverpass(south, west, north, east);
       if (id !== enrichRequestId) return;
 
@@ -1475,10 +1624,22 @@ map.on('click', 'footprint-overlap-fill', (e) => {
       const target = el();
       if (!target) return;
 
-      await streamLLM(target, osmItems, prompt);
-    })();
-  }
+      await streamLLM(target, osmItems, prompt, cLat, cLon, operators, images.length);
+    };
 
+    if (!getOpenRouterKey()) {
+      const target = el();
+      if (!target) return;
+      renderKeyForm(target, () => { if (id === enrichRequestId) runAnalysis(); });
+      return;
+    }
+
+    await runAnalysis();
+  })();
+}
+
+map.on('click', 'footprint-overlap-fill', (e) => {
+  selectCluster(e.features[0]);
   e.originalEvent.stopPropagation();
 });
 
