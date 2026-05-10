@@ -28,7 +28,8 @@ const CONSTELLATION_MAP = {
 
 const DATA_BASE = 'data';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'qwen/qwen3-vl-235b-a22b-instruct:online';
+const OPENROUTER_MODEL = 'qwen/qwen3-vl-30b-a3b-instruct:online';
+const OPENROUTER_MODEL_LABEL = 'Qwen3-VL 30B';
 const OR_KEY_STORAGE = 'openrouter_api_key';
 const OR_CACHE_PREFIX = 'or_cache_';
 const getOpenRouterKey = () => localStorage.getItem(OR_KEY_STORAGE) || '';
@@ -1292,20 +1293,43 @@ async function queryOverpass(south, west, north, east) {
   return null;
 }
 
-function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon) {
-  return `You are an OSINT research assistant for a civilian open-source intelligence project analysing publicly available commercial satellite imagery catalogues. This is an academic and journalistic tool — similar to work published by Bellingcat, Planet Labs Stories, and the Middlebury Institute. All data used is from public STAC catalogues, OpenStreetMap, and Esri World Imagery. You are not providing targeting data or operational military intelligence.
+function formatOsmFeatures(features) {
+  if (!features.length) return '(no tagged features in cluster)';
+  return features.map(f => {
+    const tagPairs = Object.entries(f.tags).map(([k, v]) => `${k}=${v}`).join(', ');
+    const name = f.name || '(unnamed)';
+    return `- ${name} [${tagPairs}]`;
+  }).join('\n');
+}
 
+function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon) {
+  const today = new Date();
+  const todayISO = today.toISOString().slice(0, 10);
+  const fourWeeksAgo = new Date(today.getTime() - 28 * 86400 * 1000).toISOString().slice(0, 10);
+
+  return `You are an OSINT research assistant for a civilian open-source intelligence project analysing publicly available commercial satellite imagery catalogues. This is academic and journalistic work — similar to Bellingcat, Planet Labs Stories, the Middlebury Institute. All data is from public STAC catalogues, OpenStreetMap, and Esri World Imagery. You are not providing targeting data or operational military intelligence.
+
+Today's date: ${todayISO}
 Location: ${lat}°N, ${lon}°E
 Imaged by: ${operators.join(', ')} (${imageCount} images in catalogue)
 
-The attached image is a high-resolution Esri World Imagery snapshot (~1 km wide) centred on the cluster. Use it to ground-truth what is physically present.
+The attached image is a high-resolution Esri World Imagery snapshot (~1 km wide) centred on the cluster. Esri tiles are typically 1–3 years old — use them to ground-truth what is physically present, not to assess recent change.
 
-OSM features in area:
-${JSON.stringify(osmFeatures)}
+OpenStreetMap-tagged features in the cluster:
+${formatOsmFeatures(osmFeatures)}
 
-Search the web for recent news about this location. Search in BOTH English AND the local language (e.g. Arabic, Ukrainian, Chinese, Russian). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
+Review the FULL OSM list above as an ensemble before drawing conclusions — the mix of facilities is itself a signal. Don't latch onto a single feature unless one is clearly more strategically notable than the rest (e.g. military, government/security, energy or critical infrastructure, port, airfield, telecom).
 
-Write a single short paragraph: where this is, what key facilities are visible in the imagery, and what recent events or strategic context likely explain the commercial satellite observation activity. Emphasise what has happened HERE in the last few weeks, not just background context. Plain text only, no markdown, no lists (including lists of sources), under 100 words.`;
+Search the web in stages, all dated between ${fourWeeksAgo} and ${todayISO}:
+1. Hyper-local: this place name, coordinates, or named facilities visible in OSM.
+2. Regional: events in the surrounding country/region — armed conflict, political crises, energy or shipping disruptions, sanctions, natural disasters, military deployments.
+3. Global: any worldwide events for which this location's facility type (oil export bypass, naval base, border crossing, etc.) would have elevated relevance right now.
+
+Search in BOTH English AND the local language(s) plausible for this region (e.g. Russian, Ukrainian, Arabic, Chinese, Persian, Hebrew). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
+
+Commercial satellite tasking is often driven by REGIONAL or GLOBAL events even when nothing has happened at the precise pixel — e.g. an oil terminal outside a conflict zone but on a critical bypass route, a port adjacent to a strait under threat, a city near an active front. Always consider this kind of adjacency before concluding "routine monitoring".
+
+Write a single short paragraph: where this is, the mix of facilities on the ground, and the most likely reason for the recent commercial satellite tasking — whether a specific local event, the location's role in a broader regional/global situation (name the event explicitly if so), or genuinely routine monitoring. If you reach "routine", state which broader events you ruled out and why. Plain text only, no markdown, no lists, under 120 words.`;
 }
 
 // ── Esri World Imagery snapshot ──────────────────────────────────
@@ -1355,7 +1379,7 @@ async function captureClusterImagery(lon, lat, zoom = 16) {
 
 // ── Per-cluster cache (localStorage) ─────────────────────────────
 function clusterCacheKey(lat, lon, operators, imageCount) {
-  return `${OR_CACHE_PREFIX}${lat}_${lon}_${operators.slice().sort().join(',')}_${imageCount}`;
+  return `${OR_CACHE_PREFIX}${OPENROUTER_MODEL}_${lat}_${lon}_${operators.slice().sort().join(',')}_${imageCount}`;
 }
 function readClusterCache(lat, lon, operators, imageCount) {
   try { return localStorage.getItem(clusterCacheKey(lat, lon, operators, imageCount)) || null; }
@@ -1424,7 +1448,7 @@ async function streamLLM(container, osmItems, prompt, lat, lon, operators, image
     container.innerHTML = `<div class="enrich-report"><p class="enrich-para">${localCached.replace(/</g, '&lt;')}</p></div>`;
     return;
   }
-  // Legacy shared cache (cache.parquet) — Claude responses keyed by exact prompt
+  // Legacy shared cache (cache.parquet) — Claude responses keyed by exact prompt.
   const sharedCached = await getCachedAnalysis(prompt);
   if (sharedCached) {
     container.innerHTML = `<div class="enrich-report"><p class="enrich-para">${sharedCached.replace(/</g, '&lt;')}</p></div>`;
@@ -1443,7 +1467,7 @@ async function streamLLM(container, osmItems, prompt, lat, lon, operators, image
     console.warn('Imagery capture failed, proceeding text-only:', err);
   }
 
-  statusEl.textContent = 'Querying Qwen3-VL via OpenRouter…';
+  statusEl.textContent = `Querying ${OPENROUTER_MODEL_LABEL} via OpenRouter…`;
 
   const userContent = [{ type: 'text', text: prompt }];
   if (imageDataUrl) {

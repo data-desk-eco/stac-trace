@@ -1,6 +1,6 @@
 # stac-trace
 
-Real-time EO satellite constellation visualizer with imagery collection heatmap and per-cluster intelligence analysis. Live at ltrg.co.uk/stac-trace
+Real-time EO satellite constellation visualizer with imagery collection heatmap and per-cluster intelligence analysis. Live at research.datadesk.eco/stac-trace
 
 ## Architecture
 
