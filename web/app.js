@@ -172,6 +172,12 @@ function dismissLoading() {
 }
 
 // ── DuckDB-WASM setup ────────────────────────────────────────────
+// We register parquet files as in-memory virtual buffers rather than letting
+// duckdb-wasm fetch them via HTTP Range requests. Cloudflare in front of
+// GitHub Pages gzip-encodes responses for some content types, which corrupts
+// duckdb-wasm's Range-based reads. By fetch()ing the whole file ourselves we
+// let the browser decode gzip transparently and hand DuckDB clean bytes.
+let _duckdbModule = null;
 async function initDuckDB() {
   setLoadingStatus('Loading DuckDB...');
   const DUCKDB_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/dist/';
@@ -187,16 +193,27 @@ async function initDuckDB() {
   const logger = new duckdb.VoidLogger();
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule);
+  _duckdbModule = duckdb;
+  _duckdbInstance = db;
   return await db.connect();
 }
 
-// ── Parquet URLs ─────────────────────────────────────────────────
-function parquetUrl() {
-  return `${location.origin}${location.pathname}data/footprints.parquet?v=${Date.now()}`;
+let _duckdbInstance = null;
+
+// Fetch a file from the deployed `data/` dir and register it inside DuckDB
+// as a virtual file. Returns the virtual filename usable in `read_parquet`.
+async function registerParquet(name) {
+  const url = `${location.origin}${location.pathname}data/${name}?v=${Date.now()}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Failed to fetch ${name}: ${resp.status}`);
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  await _duckdbInstance.registerFileBuffer(name, buf);
+  return name;
 }
-function cacheParquetUrl() {
-  return `${location.origin}${location.pathname}data/cache.parquet?v=${Date.now()}`;
-}
+
+// SQL-friendly references to the registered virtual files.
+function parquetUrl() { return 'footprints.parquet'; }
+function cacheParquetUrl() { return 'cache.parquet'; }
 
 // ── Data loading ──────────────────────────────────────────────────
 map.on('load', async () => {
@@ -398,9 +415,12 @@ map.on('load', async () => {
   initDuckDB().then(async (conn) => {
     duckdbConn = conn;
     console.log('DuckDB ready');
+    setLoadingStatus('Loading footprints...');
+    await registerParquet('footprints.parquet');
     await initDateSlider();
     // Try loading analysis cache parquet (may not exist on fresh deploys)
     try {
+      await registerParquet('cache.parquet');
       await conn.query(`CREATE TABLE IF NOT EXISTS analysis_cache AS SELECT * FROM read_parquet('${cacheParquetUrl()}')`);
       const r = await conn.query('SELECT count(*) AS n FROM analysis_cache');
       console.log(`Analysis cache: ${r.toArray()[0].n} entries`);

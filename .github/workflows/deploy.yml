@@ -26,7 +26,12 @@ jobs:
         run: |
           gh release download latest-data --pattern 'data.zip' --dir . 2>/dev/null || true
           mkdir -p web/data
-          if [ -f data.zip ]; then unzip data.zip -d web/data && rm data.zip; fi
+          if [ -f data.zip ]; then
+            # Selective extract — frontend needs only these. stac.duckdb is 1.2GB
+            # and would OOM the runner; it's only used by the sync pipeline.
+            unzip -o data.zip -d web/data tles.txt satellites.json footprints.parquet cache.parquet
+            rm data.zip
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
       - uses: actions/configure-pages@v5
