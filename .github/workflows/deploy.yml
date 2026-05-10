@@ -29,7 +29,9 @@ jobs:
           if [ -f data.zip ]; then
             # Selective extract — frontend needs only these. stac.duckdb is 1.2GB
             # and would OOM the runner; it's only used by the sync pipeline.
-            unzip -o data.zip -d web/data tles.txt satellites.json footprints.parquet cache.parquet
+            unzip -o data.zip -d web/data tles.txt satellites.json footprints.parquet
+            # cache.parquet is optional (older releases don't have it).
+            unzip -o data.zip -d web/data cache.parquet 2>/dev/null || true
             rm data.zip
           fi
         env:
