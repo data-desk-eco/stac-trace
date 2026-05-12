@@ -92,15 +92,13 @@ def main():
 
     # Export analysis cache if it exists
     cache_output = os.path.join(os.path.dirname(args.output), "cache.parquet")
-    db_rw = duckdb.connect(args.db)
     try:
-        cache_count = db_rw.execute("SELECT count(*) FROM analysis_cache").fetchone()[0]
+        cache_count = db.execute("SELECT count(*) FROM analysis_cache").fetchone()[0]
         if cache_count > 0:
-            db_rw.execute(f"COPY analysis_cache TO '{cache_output}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+            db.execute(f"COPY analysis_cache TO '{cache_output}' (FORMAT PARQUET, COMPRESSION ZSTD)")
             print(f"Cache: {cache_count} cached analyses exported")
     except duckdb.CatalogException:
         print("Cache: no analysis_cache table found, skipping")
-    db_rw.close()
 
     db.close()
     db2.close()
