@@ -28,8 +28,11 @@ const CONSTELLATION_MAP = {
 
 const DATA_BASE = 'data';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'qwen/qwen3-vl-30b-a3b-instruct:online';
+// No :online suffix — we configure the web plugin explicitly below so we can
+// tune max_results and the search prompt around the imagery date window.
+const OPENROUTER_MODEL = 'qwen/qwen3-vl-30b-a3b-instruct';
 const OPENROUTER_MODEL_LABEL = 'Qwen3-VL 30B';
+const OPENROUTER_WEB_MAX_RESULTS = 8;
 const OR_KEY_STORAGE = 'openrouter_api_key';
 const OR_CACHE_PREFIX = 'or_cache_';
 const getOpenRouterKey = () => localStorage.getItem(OR_KEY_STORAGE) || '';
@@ -1322,34 +1325,43 @@ function formatOsmFeatures(features) {
   }).join('\n');
 }
 
-function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon) {
-  const today = new Date();
-  const todayISO = today.toISOString().slice(0, 10);
-  const fourWeeksAgo = new Date(today.getTime() - 28 * 86400 * 1000).toISOString().slice(0, 10);
+function buildLLMPrompt(osmFeatures, operators, imageCount, lat, lon, imageryStartISO, imageryEndISO) {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  // Pad the news window: news typically PRECEDES tasking (event → tasking
+  // decision → capture), but follow-up reporting trails after. Two weeks
+  // before the first capture, one week after the last.
+  const padDays = (iso, days) => new Date(new Date(iso).getTime() + days * 86400 * 1000).toISOString().slice(0, 10);
+  const searchFromISO = padDays(imageryStartISO, -14);
+  const searchToISO = padDays(imageryEndISO, +7);
+  const sameDay = imageryStartISO === imageryEndISO;
+  const imageryWindow = sameDay
+    ? `on ${imageryStartISO}`
+    : `between ${imageryStartISO} and ${imageryEndISO}`;
 
   return `You are an OSINT research assistant for a civilian open-source intelligence project analysing publicly available commercial satellite imagery catalogues. This is academic and journalistic work — similar to Bellingcat, Planet Labs Stories, the Middlebury Institute. All data is from public STAC catalogues, OpenStreetMap, and Esri World Imagery. You are not providing targeting data or operational military intelligence.
 
 Today's date: ${todayISO}
 Location: ${lat}°N, ${lon}°E
 Imaged by: ${operators.join(', ')} (${imageCount} images in catalogue)
+Imagery captured: ${imageryWindow}
 
-The attached image is a high-resolution Esri World Imagery snapshot (~1 km wide) centred on the cluster. Esri tiles are typically 1–3 years old — use them to ground-truth what is physically present, not to assess recent change.
+The attached image is a high-resolution Esri World Imagery snapshot (~1 km wide) centred on the cluster. Esri tiles are typically 1–3 years old — use them to ground-truth what is physically present, not to assess change-over-time.
 
 OpenStreetMap-tagged features in the cluster:
 ${formatOsmFeatures(osmFeatures)}
 
 Review the FULL OSM list above as an ensemble before drawing conclusions — the mix of facilities is itself a signal. Don't latch onto a single feature unless one is clearly more strategically notable than the rest (e.g. military, government/security, energy or critical infrastructure, port, airfield, telecom).
 
-Search the web in stages, all dated between ${fourWeeksAgo} and ${todayISO}:
-1. Hyper-local: this place name, coordinates, or named facilities visible in OSM.
-2. Regional: events in the surrounding country/region — armed conflict, political crises, energy or shipping disruptions, sanctions, natural disasters, military deployments.
-3. Global: any worldwide events for which this location's facility type (oil export bypass, naval base, border crossing, etc.) would have elevated relevance right now.
+CRITICAL: You MUST use the web search tool. Search news from ${searchFromISO} to ${searchToISO} (the imagery window plus ~2 weeks before and ~1 week after — operators task imagery in response to events, so what matters is news AROUND THE CAPTURE DATES, not today's headlines). Run searches in this order:
+1. Hyper-local: place name, named OSM facilities, "<region> <month> ${imageryStartISO.slice(0,4)}".
+2. Regional: events in the surrounding country/region during that window — armed conflict, political crises, energy/shipping disruptions, sanctions, natural disasters, military deployments, elections, protests.
+3. Global: any worldwide events around that window for which this location's facility type (oil export bypass, naval base, border crossing, strategic strait, etc.) would have elevated relevance.
 
-Search in BOTH English AND the local language(s) plausible for this region (e.g. Russian, Ukrainian, Arabic, Chinese, Persian, Hebrew). Prioritise primary sources: news agencies, official statements, incident reports. Avoid opinion pieces.
+Search in BOTH English AND the local language(s) plausible for this region (e.g. Russian, Ukrainian, Arabic, Chinese, Persian, Hebrew, Spanish, French). Prioritise primary sources from the imagery window: news agencies, official statements, incident reports. Avoid opinion pieces and avoid sources dated long after the capture window unless they specifically reference events from that window.
 
 Commercial satellite tasking is often driven by REGIONAL or GLOBAL events even when nothing has happened at the precise pixel — e.g. an oil terminal outside a conflict zone but on a critical bypass route, a port adjacent to a strait under threat, a city near an active front. Always consider this kind of adjacency before concluding "routine monitoring".
 
-Write a single short paragraph: where this is, the mix of facilities on the ground, and the most likely reason for the recent commercial satellite tasking — whether a specific local event, the location's role in a broader regional/global situation (name the event explicitly if so), or genuinely routine monitoring. If you reach "routine", state which broader events you ruled out and why. Plain text only, no markdown, no lists, under 120 words.`;
+Write a single short paragraph: where this is, the mix of facilities on the ground, and the most likely reason for tasking ${imageryWindow} — whether a specific local event in that window, the location's role in a broader regional/global situation active at that time (name the event explicitly with its date if so), or genuinely routine monitoring. If you reach "routine", state which contemporaneous events you ruled out and why. Plain text only, no markdown, no lists, under 120 words.`;
 }
 
 // ── Esri World Imagery snapshot ──────────────────────────────────
@@ -1509,6 +1521,13 @@ async function streamLLM(container, osmItems, prompt, lat, lon, operators, image
         temperature: 0.3,
         max_tokens: 600,
         messages: [{ role: 'user', content: userContent }],
+        // Explicit web search plugin (Exa). Supersedes the :online suffix and
+        // lets us pull more grounding sources for OSINT-quality answers.
+        plugins: [{
+          id: 'web',
+          max_results: OPENROUTER_WEB_MAX_RESULTS,
+          search_prompt: 'The following web search results give news, official statements, and incident reports relevant to the satellite imagery capture window described in the user message. Prefer sources dated within that window. Cite them inline using the provided URLs.',
+        }],
       }),
     });
     if (!resp.ok) {
@@ -1663,7 +1682,11 @@ function selectCluster(f) {
       if (id !== enrichRequestId) return;
 
       const osmItems = overpassData?.elements ? summariseElements(overpassData.elements) : [];
-      const prompt = buildLLMPrompt(osmItems, operators, images.length, cLat, cLon);
+      // Images are sorted ascending by dt — first/last give the capture window.
+      // dt format is "YYYY-MM-DD HH:MM" (see CAST(... AS VARCHAR)[:16]).
+      const imageryStartISO = (images[0]?.dt || '').slice(0, 10);
+      const imageryEndISO = (images[images.length - 1]?.dt || '').slice(0, 10);
+      const prompt = buildLLMPrompt(osmItems, operators, images.length, cLat, cLon, imageryStartISO, imageryEndISO);
 
       const target = el();
       if (!target) return;
