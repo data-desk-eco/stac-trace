@@ -1350,7 +1350,7 @@ The attached image is a high-resolution Esri World Imagery snapshot (~1 km wide)
 OpenStreetMap-tagged features in the cluster:
 ${formatOsmFeatures(osmFeatures)}
 
-Review the FULL OSM list above as an ensemble before drawing conclusions — the mix of facilities is itself a signal. Don't latch onto a single feature unless one is clearly more strategically notable than the rest (e.g. military, government/security, energy or critical infrastructure, port, airfield, telecom).
+Review the FULL OSM list above as an ensemble before drawing conclusions — the mix of facilities is itself a signal. Enumerate the plausible tasking candidates in the cluster before picking one. Commercial EO operators almost never task imagery of civilian institutions like prisons, schools, hospitals, or stadiums; they overwhelmingly task military sites, airfields (including disused or former-military ones), ports, energy and critical infrastructure, telecom, borders, and government/security sites. If the cluster contains BOTH a low-priority civilian feature AND a higher-priority feature (e.g. an airfield, former AFB, pipeline, substation), the higher-priority feature is almost always the real subject — even if the civilian feature is more prominent in the OSM labels. When two or more candidates are plausible, say so explicitly rather than committing to one.
 
 CRITICAL: You MUST use the web search tool. Search news from ${searchFromISO} to ${searchToISO} (the imagery window plus ~2 weeks before and ~1 week after — operators task imagery in response to events, so what matters is news AROUND THE CAPTURE DATES, not today's headlines). Run searches in this order:
 1. Hyper-local: place name, named OSM facilities, "<region> <month> ${imageryStartISO.slice(0,4)}".
@@ -1361,7 +1361,7 @@ Search in BOTH English AND the local language(s) plausible for this region (e.g.
 
 Commercial satellite tasking is often driven by REGIONAL or GLOBAL events even when nothing has happened at the precise pixel — e.g. an oil terminal outside a conflict zone but on a critical bypass route, a port adjacent to a strait under threat, a city near an active front. Always consider this kind of adjacency before concluding "routine monitoring".
 
-Write a single short paragraph: where this is, the mix of facilities on the ground, and the most likely reason for tasking ${imageryWindow} — whether a specific local event in that window, the location's role in a broader regional/global situation active at that time (name the event explicitly with its date if so), or genuinely routine monitoring. If you reach "routine", state which contemporaneous events you ruled out and why. Plain text only, no markdown, no lists, under 120 words.`;
+Write a single short paragraph: where this is, the mix of facilities on the ground, and the most likely reason for tasking ${imageryWindow}. If multiple features in the cluster are plausible tasking subjects (e.g. an airfield AND a prison, a refinery AND a port), name both and weight them — do not silently collapse to one. The driver may be a specific local event in that window, the location's role in a broader regional/global situation active at that time (name the event explicitly with its date if so), or genuinely routine monitoring. If you reach "routine", state which contemporaneous events you ruled out and why. Plain text only, no markdown, no lists, under 120 words.`;
 }
 
 // ── Esri World Imagery snapshot ──────────────────────────────────
