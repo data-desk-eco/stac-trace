@@ -1,0 +1,27 @@
+name: Keep alive
+
+# GitHub Actions auto-disables *scheduled* workflows when the default branch
+# sees no activity for 60 days. That silently kills the daily imagery sync
+# (see sync.yml). This job makes an empty commit every 45 days to keep the
+# repo "active" so the daily cron keeps firing. See
+# https://github.com/gautamkrishnar/keepalive-workflow
+on:
+  schedule:
+    - cron: '0 12 * * 5'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gautamkrishnar/keepalive-workflow@v2
+        with:
+          commit-message: 'chore: keep scheduled workflows active'
+          time_elapsed: 45
