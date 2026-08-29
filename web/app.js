@@ -105,10 +105,15 @@ const map = new maplibregl.Map({
     version: 8,
     glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
     sources: {
-      carto: {
+      // Keyless dark base (Esri). CARTO's dark_nolabels now requires a
+      // browser API key, so we use Esri's World_Dark_Gray_Base — same host
+      // as the satellite basemap. Labels are baked in, so the openfreemap
+      // country label/border overlay is dropped to avoid doubling.
+      dark: {
         type: 'raster',
-        tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png'],
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
         tileSize: 256,
+        maxzoom: 18,
       },
       satellite: {
         type: 'raster',
@@ -116,43 +121,10 @@ const map = new maplibregl.Map({
         tileSize: 256,
         maxzoom: 19,
       },
-      labels: {
-        type: 'vector',
-        url: 'https://tiles.openfreemap.org/planet',
-      },
     },
     layers: [
-      { id: 'basemap', type: 'raster', source: 'carto' },
+      { id: 'basemap', type: 'raster', source: 'dark' },
       { id: 'satellite-basemap', type: 'raster', source: 'satellite', layout: { visibility: 'none' }, paint: { 'raster-saturation': -1, 'raster-brightness-max': 0.45 } },
-      {
-        id: 'country-borders', type: 'line', source: 'labels',
-        'source-layer': 'boundary',
-        filter: ['==', ['get', 'admin_level'], 2],
-        paint: {
-          'line-color': 'rgba(255, 255, 255, 0.15)',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 6, 1.5],
-        },
-      },
-      {
-        id: 'country-labels', type: 'symbol', source: 'labels',
-        'source-layer': 'place',
-        filter: ['==', ['get', 'class'], 'country'],
-        minzoom: 2,
-        layout: {
-          'symbol-sort-key': ['get', 'rank'],
-          'text-field': ['coalesce', ['get', 'name:en'], ['get', 'name']],
-          'text-font': ['Noto Sans Regular'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 2, 10, 6, 14],
-          'text-transform': 'uppercase',
-          'text-letter-spacing': 0.15,
-          'text-max-width': 8,
-        },
-        paint: {
-          'text-color': 'rgba(255, 255, 255, 0.85)',
-          'text-halo-color': 'rgba(0, 0, 0, 0.6)',
-          'text-halo-width': 1.5,
-        },
-      },
     ],
   },
   center: [20, 30],
